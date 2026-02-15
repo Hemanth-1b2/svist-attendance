@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ============================================
 # SVIST ATTENDANCE MANAGEMENT SYSTEM
-# Production Version for Oracle Cloud + TiDB
+# Production Version for Railway.app + TiDB
 # ============================================
 
 import os
@@ -31,21 +31,16 @@ if not app.config['SECRET_KEY']:
     raise ValueError("SECRET_KEY environment variable is required")
 
 # TiDB Cloud Serverless Configuration
-# Uses Let's Encrypt - no manual CA cert needed on Ubuntu/Debian
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 if not app.config['SQLALCHEMY_DATABASE_URI']:
     raise ValueError("DATABASE_URL environment variable is required")
 
+# Railway.app - Simplified engine options (no SSL CA needed for TiDB Serverless)
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 5,
     'max_overflow': 10,
     'pool_recycle': 3600,
-    'pool_pre_ping': True,
-    'connect_args': {
-        'ssl': {
-            'ca': '/etc/ssl/certs/ca-certificates.crt'  # Ubuntu system CA bundle
-        }
-    }
+    'pool_pre_ping': True
 }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -71,7 +66,7 @@ mail = Mail(app)
 csrf = CSRFProtect(app)
 
 # ============================================
-# DATABASE MODELS
+# DATABASE MODELS (Keep all your existing models)
 # ============================================
 
 class User(UserMixin, db.Model):
@@ -1769,7 +1764,9 @@ def init_db():
 
 if __name__ == '__main__':
     init_db()
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    # Railway.app provides PORT environment variable
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
 else:
-    # For WSGI
+    # For WSGI (Gunicorn)
     init_db()
