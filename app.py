@@ -42,12 +42,14 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_recycle': 3600,
     'pool_pre_ping': True,
     'connect_args': {
+        'ssl_disabled': False,  # Force SSL on
         'ssl': {
+            'ca': None,  # Use system CA certificates
+            'check_hostname': True,
             'ssl_mode': 'VERIFY_IDENTITY'
         }
     }
 }
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Mail Configuration
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
