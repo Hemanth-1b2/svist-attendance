@@ -1603,7 +1603,7 @@ BASE_TEMPLATE = """
                     <div class="alert alert-{{ category }}">{{ message }}</div>
                 {% endfor %}
             {% endif %}
-        {% endblock %}
+        {% endwith %}
         
         {% block content %}{% endblock %}
     </div>
