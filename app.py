@@ -81,8 +81,13 @@ login_manager.login_message_category = 'info'
 mail = Mail(app)
 csrf = CSRFProtect(app)
 
+# Make datetime available in all templates
+@app.context_processor
+def inject_datetime():
+    return dict(datetime=datetime)
+
 # ============================================
-# DATABASE MODELS (Keep all your existing models)
+# DATABASE MODELS
 # ============================================
 
 class User(UserMixin, db.Model):
@@ -277,21 +282,6 @@ class SubjectForm(FlaskForm):
         ('theory', 'Theory'), ('lab', 'Lab'), ('crt', 'CRT'), ('workshop', 'Workshop')
     ])
     submit = SubmitField('Add Subject')
-
-class ReportFilterForm(FlaskForm):
-    report_type = SelectField('Report Type', choices=[
-        ('daily', 'Daily'),
-        ('monthly', 'Monthly'),
-        ('semester', 'Semester Wise')
-    ])
-    branch = SelectField('Branch', choices=[('all', 'All Branches')] + BRANCHES)
-    semester = SelectField('Semester', choices=[('all', 'All Semesters')] + [(str(i), f'Semester {i}') for i in range(1, 9)])
-    section = SelectField('Section', choices=[('all', 'All Sections'), ('A', 'A'), ('B', 'B'), ('C', 'C')])
-    date = DateField('Date', format='%Y-%m-%d', default=datetime.now)
-    month = SelectField('Month', choices=[(str(i), datetime(2000, i, 1).strftime('%B')) for i in range(1, 13)])
-    year = IntegerField('Year', default=datetime.now().year)
-    search_query = StringField('Search (Name/Roll No)')
-    submit = SubmitField('Generate Report')
 
 # ============================================
 # UTILITIES
@@ -529,11 +519,44 @@ def get_monthly_attendance(branch, semester, section, month, year):
     
     return monthly_data, start_date, end_date
 
-def generate_pdf_report(data, report_type, **kwargs):
-    """Generate PDF report - simplified version"""
-    # For now, return HTML that can be printed to PDF
-    # You can integrate with WeasyPrint or ReportLab for actual PDF generation
-    return None
+def get_teacher_attendance_report(branch=None, name=None, month=None, year=None):
+    """Get teacher attendance report for admin"""
+    query = Teacher.query
+    
+    if branch and branch != 'all':
+        query = query.filter_by(branch=branch)
+    if name:
+        query = query.filter(Teacher.name.ilike(f'%{name}%'))
+    
+    teachers = query.all()
+    report_data = []
+    
+    for teacher in teachers:
+        if month and year:
+            start_date = datetime(int(year), int(month), 1).date()
+            if int(month) == 12:
+                end_date = datetime(int(year) + 1, 1, 1).date() - timedelta(days=1)
+            else:
+                end_date = datetime(int(year), int(month) + 1, 1).date() - timedelta(days=1)
+            
+            attendances = TeacherAttendance.query.filter(
+                TeacherAttendance.teacher_id == teacher.id,
+                TeacherAttendance.date >= start_date,
+                TeacherAttendance.date <= end_date
+            ).all()
+        else:
+            attendances = TeacherAttendance.query.filter_by(teacher_id=teacher.id).all()
+        
+        present_days = sum(1 for a in attendances if a.status == 'present')
+        
+        report_data.append({
+            'teacher': teacher,
+            'present_days': present_days,
+            'total_days': len(attendances),
+            'attendances': attendances
+        })
+    
+    return report_data
 
 def send_low_attendance_email(student, attendance_percentage):
     if not app.config['MAIL_USERNAME']:
@@ -752,18 +775,7 @@ def student_dashboard():
         semester_stopped=semester_stopped or not student.is_semester_active
     )
 
-@app.route('/student/reports/semester')
-@login_required
-def student_semester_report():
-    if current_user.role != 'student':
-        return redirect(url_for('login'))
-    
-    student = current_user.student
-    sem_data = get_comprehensive_attendance(student)
-    
-    return render_template_string(STUDENT_SEMESTER_REPORT_HTML, student=student, sem_data=sem_data)
-
-# NEW: Student daily report
+# Student Daily Report - Only their own attendance
 @app.route('/student/reports/daily')
 @login_required
 def student_daily_report():
@@ -773,21 +785,21 @@ def student_daily_report():
     student = current_user.student
     date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
     try:
-        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
     except:
-        date = datetime.now().date()
+        report_date = datetime.now().date()
     
     attendances = Attendance.query.filter_by(
         student_id=student.id,
-        date=date
+        date=report_date
     ).order_by(Attendance.period).all()
     
     return render_template_string(STUDENT_DAILY_REPORT_HTML, 
                                   student=student, 
                                   attendances=attendances, 
-                                  date=date)
+                                  date=report_date)
 
-# NEW: Student monthly report
+# Student Monthly Report - Only their own attendance
 @app.route('/student/reports/monthly')
 @login_required
 def student_monthly_report():
@@ -824,6 +836,18 @@ def student_monthly_report():
                                   total_classes=total_classes,
                                   percentage=(total_present/total_classes*100) if total_classes > 0 else 0)
 
+# Student Semester Report - Only their own attendance
+@app.route('/student/reports/semester')
+@login_required
+def student_semester_report():
+    if current_user.role != 'student':
+        return redirect(url_for('login'))
+    
+    student = current_user.student
+    sem_data = get_comprehensive_attendance(student)
+    
+    return render_template_string(STUDENT_SEMESTER_REPORT_HTML, student=student, sem_data=sem_data)
+
 # ============================================
 # TEACHER ROUTES
 # ============================================
@@ -843,9 +867,6 @@ def teacher_dashboard():
     ).first()
     
     yearly_data = get_teacher_yearly_attendance(teacher, current_year)
-    
-    # REMOVED: subjects = Subject.query.filter_by(branch=teacher.branch).all()
-    # Now teachers can access all branches
     
     return render_template_string(
         TEACHER_DASHBOARD_HTML,
@@ -984,9 +1005,6 @@ def get_subjects(branch, semester):
     if current_user.role != 'teacher':
         return jsonify({'error': 'Unauthorized'}), 403
     
-    # REMOVED: Check if teacher.branch == branch
-    # Now teachers can access subjects for ANY branch and ANY semester
-    
     subjects = Subject.query.filter_by(branch=branch, semester=int(semester)).all()
     return jsonify([{
         'id': s.id, 'code': s.code, 'name': s.name, 'type': s.subject_type
@@ -1001,9 +1019,7 @@ def get_students():
     branch = request.args.get('branch')
     semester = request.args.get('semester')
     section = request.args.get('section')
-    
-    # REMOVED: Check if teacher.branch == branch
-    # Now teachers can access students from ANY branch and ANY semester
+    register_number = request.args.get('register_number')
     
     query = Student.query.filter_by(is_semester_active=True)
     
@@ -1013,6 +1029,8 @@ def get_students():
         query = query.filter_by(current_semester=int(semester))
     if section:
         query = query.filter_by(section=section)
+    if register_number:
+        query = query.filter(Student.register_number.ilike(f'%{register_number}%'))
     
     students = query.all()
     
@@ -1022,44 +1040,42 @@ def get_students():
         'name': s.name
     } for s in students])
 
-# NEW: Teacher reports - Daily
+# Teacher Daily Report - All students with filters
 @app.route('/teacher/reports/daily')
 @login_required
 def teacher_daily_report():
     if current_user.role != 'teacher':
         return redirect(url_for('login'))
     
-    form = ReportFilterForm()
     date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    search_query = request.args.get('search_query', '')
+    register_number = request.args.get('register_number', '')
     
     try:
-        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
     except:
-        date = datetime.now().date()
+        report_date = datetime.now().date()
     
     # Get daily attendance
-    attendance_data = get_daily_attendance(branch, semester, section, date)
+    attendance_data = get_daily_attendance(branch, semester, section, report_date)
     
-    # Apply search filter
-    if search_query:
+    # Apply register number filter
+    if register_number:
         attendance_data = {k: v for k, v in attendance_data.items() 
-                          if search_query.lower() in v['student'].name.lower() 
-                          or search_query.lower() in v['student'].register_number.lower()}
+                          if register_number.lower() in v['student'].register_number.lower()}
     
     return render_template_string(TEACHER_DAILY_REPORT_HTML,
                                   data=attendance_data,
-                                  date=date,
+                                  date=report_date,
                                   branch=branch,
                                   semester=semester,
                                   section=section,
-                                  search_query=search_query,
+                                  register_number=register_number,
                                   branches=ALL_BRANCHES)
 
-# NEW: Teacher reports - Monthly
+# Teacher Monthly Report - All students with filters
 @app.route('/teacher/reports/monthly')
 @login_required
 def teacher_monthly_report():
@@ -1071,15 +1087,14 @@ def teacher_monthly_report():
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    search_query = request.args.get('search_query', '')
+    register_number = request.args.get('register_number', '')
     
     monthly_data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, int(year))
     
-    # Apply search filter
-    if search_query:
+    # Apply register number filter
+    if register_number:
         monthly_data = [d for d in monthly_data 
-                       if search_query.lower() in d['student'].name.lower() 
-                       or search_query.lower() in d['student'].register_number.lower()]
+                       if register_number.lower() in d['student'].register_number.lower()]
     
     return render_template_string(TEACHER_MONTHLY_REPORT_HTML,
                                   data=monthly_data,
@@ -1089,10 +1104,10 @@ def teacher_monthly_report():
                                   branch=branch,
                                   semester=semester,
                                   section=section,
-                                  search_query=search_query,
+                                  register_number=register_number,
                                   branches=ALL_BRANCHES)
 
-# NEW: Teacher reports - Semester
+# Teacher Semester Report - All students with filters
 @app.route('/teacher/reports/semester')
 @login_required
 def teacher_semester_report():
@@ -1102,7 +1117,7 @@ def teacher_semester_report():
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    search_query = request.args.get('search_query', '')
+    register_number = request.args.get('register_number', '')
     
     query = Student.query.filter_by(is_semester_active=True)
     
@@ -1112,15 +1127,10 @@ def teacher_semester_report():
         query = query.filter_by(current_semester=int(semester))
     if section != 'all':
         query = query.filter_by(section=section)
+    if register_number:
+        query = query.filter(Student.register_number.ilike(f'%{register_number}%'))
     
     students = query.all()
-    
-    # Apply search filter
-    if search_query:
-        students = [s for s in students 
-                   if search_query.lower() in s.name.lower() 
-                   or search_query.lower() in s.register_number.lower()]
-    
     student_data = [{'student': s, 'data': get_comprehensive_attendance(s)} for s in students]
     
     return render_template_string(TEACHER_SEMESTER_REPORT_HTML,
@@ -1128,7 +1138,7 @@ def teacher_semester_report():
                                   branch=branch,
                                   semester=semester,
                                   section=section,
-                                  search_query=search_query,
+                                  register_number=register_number,
                                   branches=ALL_BRANCHES)
 
 # ============================================
@@ -1284,7 +1294,7 @@ def add_subject():
     subjects = Subject.query.order_by(Subject.branch, Subject.semester).all()
     return render_template_string(ADMIN_SUBJECTS_HTML, form=form, subjects=subjects)
 
-# NEW: Admin reports with all options
+# Admin Reports Main Page
 @app.route('/admin/reports')
 @login_required
 @admin_required
@@ -1295,9 +1305,12 @@ def admin_reports():
         return redirect(url_for('admin_daily_report'))
     elif report_type == 'monthly':
         return redirect(url_for('admin_monthly_report'))
+    elif report_type == 'teacher':
+        return redirect(url_for('admin_teacher_report'))
     else:
         return redirect(url_for('admin_semester_report'))
 
+# Admin Daily Report - All students with filters
 @app.route('/admin/reports/daily')
 @login_required
 @admin_required
@@ -1306,30 +1319,30 @@ def admin_daily_report():
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    search_query = request.args.get('search_query', '')
+    register_number = request.args.get('register_number', '')
     
     try:
-        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
     except:
-        date = datetime.now().date()
+        report_date = datetime.now().date()
     
-    attendance_data = get_daily_attendance(branch, semester, section, date)
+    attendance_data = get_daily_attendance(branch, semester, section, report_date)
     
-    # Apply search filter
-    if search_query:
+    # Apply register number filter
+    if register_number:
         attendance_data = {k: v for k, v in attendance_data.items() 
-                          if search_query.lower() in v['student'].name.lower() 
-                          or search_query.lower() in v['student'].register_number.lower()}
+                          if register_number.lower() in v['student'].register_number.lower()}
     
     return render_template_string(ADMIN_DAILY_REPORT_HTML,
                                   data=attendance_data,
-                                  date=date,
+                                  date=report_date,
                                   branch=branch,
                                   semester=semester,
                                   section=section,
-                                  search_query=search_query,
+                                  register_number=register_number,
                                   branches=ALL_BRANCHES)
 
+# Admin Monthly Report - All students with filters
 @app.route('/admin/reports/monthly')
 @login_required
 @admin_required
@@ -1339,15 +1352,14 @@ def admin_monthly_report():
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    search_query = request.args.get('search_query', '')
+    register_number = request.args.get('register_number', '')
     
     monthly_data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, int(year))
     
-    # Apply search filter
-    if search_query:
+    # Apply register number filter
+    if register_number:
         monthly_data = [d for d in monthly_data 
-                       if search_query.lower() in d['student'].name.lower() 
-                       or search_query.lower() in d['student'].register_number.lower()]
+                       if register_number.lower() in d['student'].register_number.lower()]
     
     return render_template_string(ADMIN_MONTHLY_REPORT_HTML,
                                   data=monthly_data,
@@ -1357,9 +1369,10 @@ def admin_monthly_report():
                                   branch=branch,
                                   semester=semester,
                                   section=section,
-                                  search_query=search_query,
+                                  register_number=register_number,
                                   branches=ALL_BRANCHES)
 
+# Admin Semester Report - All students with filters
 @app.route('/admin/reports/semester')
 @login_required
 @admin_required
@@ -1367,7 +1380,7 @@ def admin_semester_report():
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    search_query = request.args.get('search_query', '')
+    register_number = request.args.get('register_number', '')
     
     query = Student.query.filter_by(is_semester_active=True)
     
@@ -1377,15 +1390,10 @@ def admin_semester_report():
         query = query.filter_by(current_semester=int(semester))
     if section != 'all':
         query = query.filter_by(section=section)
+    if register_number:
+        query = query.filter(Student.register_number.ilike(f'%{register_number}%'))
     
     students = query.all()
-    
-    # Apply search filter
-    if search_query:
-        students = [s for s in students 
-                   if search_query.lower() in s.name.lower() 
-                   or search_query.lower() in s.register_number.lower()]
-    
     student_data = [{'student': s, 'data': get_comprehensive_attendance(s)} for s in students]
     
     return render_template_string(ADMIN_SEMESTER_REPORT_HTML,
@@ -1393,11 +1401,32 @@ def admin_semester_report():
                                   branch=branch,
                                   semester=semester,
                                   section=section,
-                                  search_query=search_query,
+                                  register_number=register_number,
+                                  branches=ALL_BRANCHES)
+
+# Admin Teacher Report - Teacher attendance with filters
+@app.route('/admin/reports/teachers')
+@login_required
+@admin_required
+def admin_teacher_report():
+    branch = request.args.get('branch', 'all')
+    name = request.args.get('name', '')
+    month = request.args.get('month', str(datetime.now().month))
+    year = request.args.get('year', str(datetime.now().year))
+    
+    report_data = get_teacher_attendance_report(branch, name, month, year)
+    
+    return render_template_string(ADMIN_TEACHER_REPORT_HTML,
+                                  data=report_data,
+                                  branch=branch,
+                                  name=name,
+                                  month=month,
+                                  year=year,
+                                  month_name=datetime(int(year), int(month), 1).strftime('%B'),
                                   branches=ALL_BRANCHES)
 
 # ============================================
-# HTML TEMPLATES (Inline for single-file deployment)
+# HTML TEMPLATES
 # ============================================
 
 BASE_TEMPLATE = """
@@ -1766,7 +1795,7 @@ STUDENT_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
     </div>
 """)
 
-# NEW: Student Daily Report Template
+# Student Daily Report - Only their own attendance
 STUDENT_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Daily Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Daily Attendance Report</h2>
@@ -1800,7 +1829,7 @@ STUDENT_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance S
     </div>
 """)
 
-# NEW: Student Monthly Report Template
+# Student Monthly Report - Only their own attendance
 STUDENT_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Monthly Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Monthly Attendance Report</h2>
@@ -2080,7 +2109,7 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
     </script>
 """)
 
-# NEW: Teacher Daily Report Template
+# Teacher Daily Report - All students with filters and register number search
 TEACHER_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Daily Attendance Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Daily Attendance Report</h2>
@@ -2125,8 +2154,8 @@ TEACHER_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance S
                 </select>
             </div>
             <div class="form-group search-box" style="margin-bottom:0;">
-                <label>Search (Name/Roll No)</label>
-                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+                <label>Register Number</label>
+                <input type="text" name="register_number" class="form-control" value="{{ register_number }}" placeholder="Enter register number...">
             </div>
             <button type="submit" class="btn btn-info">Filter</button>
             <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
@@ -2164,7 +2193,7 @@ TEACHER_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance S
     </div>
 """)
 
-# NEW: Teacher Monthly Report Template
+# Teacher Monthly Report - All students with filters and register number search
 TEACHER_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Monthly Attendance Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Monthly Attendance Report</h2>
@@ -2221,8 +2250,8 @@ TEACHER_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance
                 </select>
             </div>
             <div class="form-group search-box" style="margin-bottom:0;">
-                <label>Search (Name/Roll No)</label>
-                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+                <label>Register Number</label>
+                <input type="text" name="register_number" class="form-control" value="{{ register_number }}" placeholder="Enter register number...">
             </div>
             <button type="submit" class="btn btn-info">Filter</button>
             <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
@@ -2262,7 +2291,7 @@ TEACHER_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance
     </div>
 """)
 
-# NEW: Teacher Semester Report Template
+# Teacher Semester Report - All students with filters and register number search
 TEACHER_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Semester Attendance Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Semester Attendance Report</h2>
@@ -2303,8 +2332,8 @@ TEACHER_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendanc
                 </select>
             </div>
             <div class="form-group search-box" style="margin-bottom:0;">
-                <label>Search (Name/Roll No)</label>
-                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+                <label>Register Number</label>
+                <input type="text" name="register_number" class="form-control" value="{{ register_number }}" placeholder="Enter register number...">
             </div>
             <button type="submit" class="btn btn-info">Filter</button>
             <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
@@ -2419,6 +2448,7 @@ ADMIN_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System
         <a href="{{ url_for('admin_daily_report') }}" class="btn btn-info">Daily Reports</a>
         <a href="{{ url_for('admin_monthly_report') }}" class="btn btn-info">Monthly Reports</a>
         <a href="{{ url_for('admin_semester_report') }}" class="btn btn-info">Semester Reports</a>
+        <a href="{{ url_for('admin_teacher_report') }}" class="btn btn-warning">Teacher Reports</a>
     </div>
 """)
 
@@ -2454,7 +2484,7 @@ ADMIN_SUBJECTS_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{
     </div>
 """)
 
-# NEW: Admin Daily Report Template
+# Admin Daily Report - All students with filters and register number search
 ADMIN_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Daily Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Admin - Daily Attendance Report</h2>
@@ -2463,6 +2493,7 @@ ADMIN_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Sys
         <a href="{{ url_for('admin_daily_report') }}" class="report-tab active">Daily</a>
         <a href="{{ url_for('admin_monthly_report') }}" class="report-tab">Monthly</a>
         <a href="{{ url_for('admin_semester_report') }}" class="report-tab">Semester</a>
+        <a href="{{ url_for('admin_teacher_report') }}" class="report-tab">Teachers</a>
     </div>
     
     <div class="card">
@@ -2499,8 +2530,8 @@ ADMIN_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Sys
                 </select>
             </div>
             <div class="form-group search-box" style="margin-bottom:0;">
-                <label>Search (Name/Roll No)</label>
-                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+                <label>Register Number</label>
+                <input type="text" name="register_number" class="form-control" value="{{ register_number }}" placeholder="Enter register number...">
             </div>
             <button type="submit" class="btn btn-info">Filter</button>
             <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
@@ -2538,7 +2569,7 @@ ADMIN_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Sys
     </div>
 """)
 
-# NEW: Admin Monthly Report Template
+# Admin Monthly Report - All students with filters and register number search
 ADMIN_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Monthly Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Admin - Monthly Attendance Report</h2>
@@ -2547,6 +2578,7 @@ ADMIN_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance S
         <a href="{{ url_for('admin_daily_report') }}" class="report-tab">Daily</a>
         <a href="{{ url_for('admin_monthly_report') }}" class="report-tab active">Monthly</a>
         <a href="{{ url_for('admin_semester_report') }}" class="report-tab">Semester</a>
+        <a href="{{ url_for('admin_teacher_report') }}" class="report-tab">Teachers</a>
     </div>
     
     <div class="card">
@@ -2595,8 +2627,8 @@ ADMIN_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance S
                 </select>
             </div>
             <div class="form-group search-box" style="margin-bottom:0;">
-                <label>Search (Name/Roll No)</label>
-                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+                <label>Register Number</label>
+                <input type="text" name="register_number" class="form-control" value="{{ register_number }}" placeholder="Enter register number...">
             </div>
             <button type="submit" class="btn btn-info">Filter</button>
             <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
@@ -2636,7 +2668,7 @@ ADMIN_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance S
     </div>
 """)
 
-# NEW: Admin Semester Report Template
+# Admin Semester Report - All students with filters and register number search
 ADMIN_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Semester Report") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Admin - Semester Attendance Report</h2>
@@ -2645,6 +2677,7 @@ ADMIN_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance 
         <a href="{{ url_for('admin_daily_report') }}" class="report-tab">Daily</a>
         <a href="{{ url_for('admin_monthly_report') }}" class="report-tab">Monthly</a>
         <a href="{{ url_for('admin_semester_report') }}" class="report-tab active">Semester</a>
+        <a href="{{ url_for('admin_teacher_report') }}" class="report-tab">Teachers</a>
     </div>
     
     <div class="card">
@@ -2677,8 +2710,8 @@ ADMIN_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance 
                 </select>
             </div>
             <div class="form-group search-box" style="margin-bottom:0;">
-                <label>Search (Name/Roll No)</label>
-                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+                <label>Register Number</label>
+                <input type="text" name="register_number" class="form-control" value="{{ register_number }}" placeholder="Enter register number...">
             </div>
             <button type="submit" class="btn btn-info">Filter</button>
             <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
@@ -2714,6 +2747,85 @@ ADMIN_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance 
         </table>
         {% else %}
         <p>No records found for the selected criteria.</p>
+        {% endif %}
+    </div>
+""")
+
+# Admin Teacher Report - Teacher attendance with name and branch filters
+ADMIN_TEACHER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Teacher Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Admin - Teacher Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('admin_daily_report') }}" class="report-tab">Daily</a>
+        <a href="{{ url_for('admin_monthly_report') }}" class="report-tab">Monthly</a>
+        <a href="{{ url_for('admin_semester_report') }}" class="report-tab">Semester</a>
+        <a href="{{ url_for('admin_teacher_report') }}" class="report-tab active">Teachers</a>
+    </div>
+    
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Month</label>
+                <select name="month" class="form-control">
+                    {% for i in range(1, 13) %}
+                    <option value="{{ i }}" {{ 'selected' if month == str(i) else '' }}>{{ datetime(2000, i, 1).strftime('%B') }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Year</label>
+                <select name="year" class="form-control">
+                    {% for y in range(2024, 2027) %}
+                    <option value="{{ y }}" {{ 'selected' if year == y else '' }}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Branch</label>
+                <select name="branch" class="form-control">
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Teacher Name</label>
+                <input type="text" name="name" class="form-control" value="{{ name }}" placeholder="Enter teacher name...">
+            </div>
+            <button type="submit" class="btn btn-info">Filter</button>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Teacher Attendance for {{ month_name }} {{ year }}</h3>
+        {% if data %}
+        <table>
+            <tr>
+                <th>Employee ID</th>
+                <th>Name</th>
+                <th>Branch</th>
+                <th>Role</th>
+                <th>Present Days</th>
+                <th>Total Days</th>
+                <th>Percentage</th>
+            </tr>
+            {% for record in data %}
+            <tr>
+                <td>{{ record.teacher.employee_id }}</td>
+                <td>{{ record.teacher.name }}</td>
+                <td>{{ record.teacher.branch }}</td>
+                <td>{{ record.teacher.role }}</td>
+                <td>{{ record.present_days }}</td>
+                <td>{{ record.total_days }}</td>
+                <td>{{ "%.1f"|format((record.present_days/record.total_days*100) if record.total_days > 0 else 0) }}%</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No teacher attendance records found for the selected criteria.</p>
         {% endif %}
     </div>
 """)
