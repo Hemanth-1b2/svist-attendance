@@ -19,7 +19,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_mail import Mail, Message
 from flask_wtf import FlaskForm, CSRFProtect
-from wtforms import StringField, PasswordField, SelectField, IntegerField, SubmitField, EmailField
+from wtforms import StringField, PasswordField, SelectField, IntegerField, SubmitField, EmailField, DateField
 from wtforms.validators import DataRequired, Email, Length
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
@@ -33,7 +33,6 @@ app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
 if not app.config['SECRET_KEY']:
     raise ValueError("SECRET_KEY environment variable is required")
 
-# TiDB Cloud Serverless Configuration
 # TiDB Cloud Serverless Configuration
 database_url = os.environ.get('DATABASE_URL')
 
@@ -226,6 +225,8 @@ BRANCHES = [
     ('CIVIL', 'CIVIL'), ('MECH', 'MECH'), ('DS', 'DS'), ('AIML', 'AIML')
 ]
 
+ALL_BRANCHES = ['ECE', 'CSE', 'EEE', 'CIVIL', 'MECH', 'DS', 'AIML']
+
 # ============================================
 # FORMS
 # ============================================
@@ -276,6 +277,21 @@ class SubjectForm(FlaskForm):
         ('theory', 'Theory'), ('lab', 'Lab'), ('crt', 'CRT'), ('workshop', 'Workshop')
     ])
     submit = SubmitField('Add Subject')
+
+class ReportFilterForm(FlaskForm):
+    report_type = SelectField('Report Type', choices=[
+        ('daily', 'Daily'),
+        ('monthly', 'Monthly'),
+        ('semester', 'Semester Wise')
+    ])
+    branch = SelectField('Branch', choices=[('all', 'All Branches')] + BRANCHES)
+    semester = SelectField('Semester', choices=[('all', 'All Semesters')] + [(str(i), f'Semester {i}') for i in range(1, 9)])
+    section = SelectField('Section', choices=[('all', 'All Sections'), ('A', 'A'), ('B', 'B'), ('C', 'C')])
+    date = DateField('Date', format='%Y-%m-%d', default=datetime.now)
+    month = SelectField('Month', choices=[(str(i), datetime(2000, i, 1).strftime('%B')) for i in range(1, 13)])
+    year = IntegerField('Year', default=datetime.now().year)
+    search_query = StringField('Search (Name/Roll No)')
+    submit = SubmitField('Generate Report')
 
 # ============================================
 # UTILITIES
@@ -433,6 +449,91 @@ def get_teacher_yearly_attendance(teacher, year=None):
         'percentage': (total_days / working_days * 100) if working_days > 0 else 0,
         'monthly_breakdown': monthly_data
     }
+
+def get_daily_attendance(branch, semester, section, date):
+    """Get daily attendance report"""
+    query = Attendance.query.filter_by(date=date)
+    
+    if branch != 'all':
+        query = query.join(Student).filter(Student.branch == branch)
+    if semester != 'all':
+        query = query.join(Student).filter(Student.current_semester == int(semester))
+    if section != 'all':
+        query = query.join(Student).filter(Student.section == section)
+    
+    attendances = query.all()
+    
+    # Group by student
+    student_attendance = {}
+    for att in attendances:
+        student_id = att.student_id
+        if student_id not in student_attendance:
+            student_attendance[student_id] = {
+                'student': att.student,
+                'periods': [],
+                'present_count': 0,
+                'total_count': 0
+            }
+        student_attendance[student_id]['periods'].append({
+            'period': att.period,
+            'status': att.status,
+            'subject': att.subject,
+            'type': att.attendance_type
+        })
+        student_attendance[student_id]['total_count'] += 1
+        if att.status == 'present':
+            student_attendance[student_id]['present_count'] += 1
+    
+    return student_attendance
+
+def get_monthly_attendance(branch, semester, section, month, year):
+    """Get monthly attendance report"""
+    start_date = datetime(year, int(month), 1).date()
+    if int(month) == 12:
+        end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        end_date = datetime(year, int(month) + 1, 1).date() - timedelta(days=1)
+    
+    query = Student.query.filter_by(is_semester_active=True)
+    
+    if branch != 'all':
+        query = query.filter_by(branch=branch)
+    if semester != 'all':
+        query = query.filter_by(current_semester=int(semester))
+    if section != 'all':
+        query = query.filter_by(section=section)
+    
+    students = query.all()
+    monthly_data = []
+    
+    for student in students:
+        attendances = Attendance.query.filter(
+            Attendance.student_id == student.id,
+            Attendance.date >= start_date,
+            Attendance.date <= end_date
+        ).all()
+        
+        theory_present = sum(1 for a in attendances if a.attendance_type == 'theory' and a.status == 'present')
+        theory_total = sum(1 for a in attendances if a.attendance_type == 'theory')
+        practical_present = sum(1 for a in attendances if a.attendance_type in ['lab', 'crt', 'workshop'] and a.status == 'present')
+        practical_total = sum(1 for a in attendances if a.attendance_type in ['lab', 'crt', 'workshop'])
+        
+        monthly_data.append({
+            'student': student,
+            'theory_present': theory_present,
+            'theory_total': theory_total,
+            'practical_present': practical_present,
+            'practical_total': practical_total,
+            'overall_percentage': ((theory_present + practical_present) / (theory_total + practical_total) * 100) if (theory_total + practical_total) > 0 else 0
+        })
+    
+    return monthly_data, start_date, end_date
+
+def generate_pdf_report(data, report_type, **kwargs):
+    """Generate PDF report - simplified version"""
+    # For now, return HTML that can be printed to PDF
+    # You can integrate with WeasyPrint or ReportLab for actual PDF generation
+    return None
 
 def send_low_attendance_email(student, attendance_percentage):
     if not app.config['MAIL_USERNAME']:
@@ -662,6 +763,67 @@ def student_semester_report():
     
     return render_template_string(STUDENT_SEMESTER_REPORT_HTML, student=student, sem_data=sem_data)
 
+# NEW: Student daily report
+@app.route('/student/reports/daily')
+@login_required
+def student_daily_report():
+    if current_user.role != 'student':
+        return redirect(url_for('login'))
+    
+    student = current_user.student
+    date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+    try:
+        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except:
+        date = datetime.now().date()
+    
+    attendances = Attendance.query.filter_by(
+        student_id=student.id,
+        date=date
+    ).order_by(Attendance.period).all()
+    
+    return render_template_string(STUDENT_DAILY_REPORT_HTML, 
+                                  student=student, 
+                                  attendances=attendances, 
+                                  date=date)
+
+# NEW: Student monthly report
+@app.route('/student/reports/monthly')
+@login_required
+def student_monthly_report():
+    if current_user.role != 'student':
+        return redirect(url_for('login'))
+    
+    student = current_user.student
+    month = int(request.args.get('month', datetime.now().month))
+    year = int(request.args.get('year', datetime.now().year))
+    
+    start_date = datetime(year, month, 1).date()
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+    else:
+        end_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
+    
+    attendances = Attendance.query.filter(
+        Attendance.student_id == student.id,
+        Attendance.date >= start_date,
+        Attendance.date <= end_date
+    ).order_by(Attendance.date, Attendance.period).all()
+    
+    # Calculate statistics
+    total_present = sum(1 for a in attendances if a.status == 'present')
+    total_classes = len(attendances)
+    
+    return render_template_string(STUDENT_MONTHLY_REPORT_HTML,
+                                  student=student,
+                                  attendances=attendances,
+                                  month=month,
+                                  year=year,
+                                  month_name=datetime(year, month, 1).strftime('%B'),
+                                  total_present=total_present,
+                                  total_classes=total_classes,
+                                  percentage=(total_present/total_classes*100) if total_classes > 0 else 0)
+
 # ============================================
 # TEACHER ROUTES
 # ============================================
@@ -681,17 +843,16 @@ def teacher_dashboard():
     ).first()
     
     yearly_data = get_teacher_yearly_attendance(teacher, current_year)
-    subjects = Subject.query.filter_by(branch=teacher.branch).all()
-    semester_stopped = is_semester_stopped(teacher.branch, 1)
+    
+    # REMOVED: subjects = Subject.query.filter_by(branch=teacher.branch).all()
+    # Now teachers can access all branches
     
     return render_template_string(
         TEACHER_DASHBOARD_HTML,
         teacher=teacher,
         today_status=today_status,
         yearly_data=yearly_data,
-        subjects=subjects,
-        today=today,
-        semester_stopped=semester_stopped
+        today=today
     )
 
 @app.route('/teacher/mark-attendance', methods=['POST'])
@@ -823,6 +984,9 @@ def get_subjects(branch, semester):
     if current_user.role != 'teacher':
         return jsonify({'error': 'Unauthorized'}), 403
     
+    # REMOVED: Check if teacher.branch == branch
+    # Now teachers can access subjects for ANY branch and ANY semester
+    
     subjects = Subject.query.filter_by(branch=branch, semester=int(semester)).all()
     return jsonify([{
         'id': s.id, 'code': s.code, 'name': s.name, 'type': s.subject_type
@@ -838,18 +1002,134 @@ def get_students():
     semester = request.args.get('semester')
     section = request.args.get('section')
     
-    students = Student.query.filter_by(
-        branch=branch,
-        current_semester=int(semester),
-        section=section,
-        is_semester_active=True
-    ).all()
+    # REMOVED: Check if teacher.branch == branch
+    # Now teachers can access students from ANY branch and ANY semester
+    
+    query = Student.query.filter_by(is_semester_active=True)
+    
+    if branch:
+        query = query.filter_by(branch=branch)
+    if semester:
+        query = query.filter_by(current_semester=int(semester))
+    if section:
+        query = query.filter_by(section=section)
+    
+    students = query.all()
     
     return jsonify([{
         'id': s.id,
         'register_number': s.register_number,
         'name': s.name
     } for s in students])
+
+# NEW: Teacher reports - Daily
+@app.route('/teacher/reports/daily')
+@login_required
+def teacher_daily_report():
+    if current_user.role != 'teacher':
+        return redirect(url_for('login'))
+    
+    form = ReportFilterForm()
+    date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    search_query = request.args.get('search_query', '')
+    
+    try:
+        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except:
+        date = datetime.now().date()
+    
+    # Get daily attendance
+    attendance_data = get_daily_attendance(branch, semester, section, date)
+    
+    # Apply search filter
+    if search_query:
+        attendance_data = {k: v for k, v in attendance_data.items() 
+                          if search_query.lower() in v['student'].name.lower() 
+                          or search_query.lower() in v['student'].register_number.lower()}
+    
+    return render_template_string(TEACHER_DAILY_REPORT_HTML,
+                                  data=attendance_data,
+                                  date=date,
+                                  branch=branch,
+                                  semester=semester,
+                                  section=section,
+                                  search_query=search_query,
+                                  branches=ALL_BRANCHES)
+
+# NEW: Teacher reports - Monthly
+@app.route('/teacher/reports/monthly')
+@login_required
+def teacher_monthly_report():
+    if current_user.role != 'teacher':
+        return redirect(url_for('login'))
+    
+    month = request.args.get('month', str(datetime.now().month))
+    year = request.args.get('year', str(datetime.now().year))
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    search_query = request.args.get('search_query', '')
+    
+    monthly_data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, int(year))
+    
+    # Apply search filter
+    if search_query:
+        monthly_data = [d for d in monthly_data 
+                       if search_query.lower() in d['student'].name.lower() 
+                       or search_query.lower() in d['student'].register_number.lower()]
+    
+    return render_template_string(TEACHER_MONTHLY_REPORT_HTML,
+                                  data=monthly_data,
+                                  month=month,
+                                  year=year,
+                                  month_name=datetime(int(year), int(month), 1).strftime('%B'),
+                                  branch=branch,
+                                  semester=semester,
+                                  section=section,
+                                  search_query=search_query,
+                                  branches=ALL_BRANCHES)
+
+# NEW: Teacher reports - Semester
+@app.route('/teacher/reports/semester')
+@login_required
+def teacher_semester_report():
+    if current_user.role != 'teacher':
+        return redirect(url_for('login'))
+    
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    search_query = request.args.get('search_query', '')
+    
+    query = Student.query.filter_by(is_semester_active=True)
+    
+    if branch != 'all':
+        query = query.filter_by(branch=branch)
+    if semester != 'all':
+        query = query.filter_by(current_semester=int(semester))
+    if section != 'all':
+        query = query.filter_by(section=section)
+    
+    students = query.all()
+    
+    # Apply search filter
+    if search_query:
+        students = [s for s in students 
+                   if search_query.lower() in s.name.lower() 
+                   or search_query.lower() in s.register_number.lower()]
+    
+    student_data = [{'student': s, 'data': get_comprehensive_attendance(s)} for s in students]
+    
+    return render_template_string(TEACHER_SEMESTER_REPORT_HTML,
+                                  student_data=student_data,
+                                  branch=branch,
+                                  semester=semester,
+                                  section=section,
+                                  search_query=search_query,
+                                  branches=ALL_BRANCHES)
 
 # ============================================
 # ADMIN ROUTES
@@ -1004,32 +1284,117 @@ def add_subject():
     subjects = Subject.query.order_by(Subject.branch, Subject.semester).all()
     return render_template_string(ADMIN_SUBJECTS_HTML, form=form, subjects=subjects)
 
-@app.route('/admin/reports/students/semester')
+# NEW: Admin reports with all options
+@app.route('/admin/reports')
 @login_required
 @admin_required
-def admin_student_semester_report():
-    branch = request.args.get('branch', 'all')
-    semester = int(request.args.get('semester', 1))
-    section = request.args.get('section', 'all')
+def admin_reports():
+    report_type = request.args.get('report_type', 'daily')
     
-    query = Student.query.filter_by(current_semester=semester)
+    if report_type == 'daily':
+        return redirect(url_for('admin_daily_report'))
+    elif report_type == 'monthly':
+        return redirect(url_for('admin_monthly_report'))
+    else:
+        return redirect(url_for('admin_semester_report'))
+
+@app.route('/admin/reports/daily')
+@login_required
+@admin_required
+def admin_daily_report():
+    date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    search_query = request.args.get('search_query', '')
+    
+    try:
+        date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    except:
+        date = datetime.now().date()
+    
+    attendance_data = get_daily_attendance(branch, semester, section, date)
+    
+    # Apply search filter
+    if search_query:
+        attendance_data = {k: v for k, v in attendance_data.items() 
+                          if search_query.lower() in v['student'].name.lower() 
+                          or search_query.lower() in v['student'].register_number.lower()}
+    
+    return render_template_string(ADMIN_DAILY_REPORT_HTML,
+                                  data=attendance_data,
+                                  date=date,
+                                  branch=branch,
+                                  semester=semester,
+                                  section=section,
+                                  search_query=search_query,
+                                  branches=ALL_BRANCHES)
+
+@app.route('/admin/reports/monthly')
+@login_required
+@admin_required
+def admin_monthly_report():
+    month = request.args.get('month', str(datetime.now().month))
+    year = request.args.get('year', str(datetime.now().year))
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    search_query = request.args.get('search_query', '')
+    
+    monthly_data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, int(year))
+    
+    # Apply search filter
+    if search_query:
+        monthly_data = [d for d in monthly_data 
+                       if search_query.lower() in d['student'].name.lower() 
+                       or search_query.lower() in d['student'].register_number.lower()]
+    
+    return render_template_string(ADMIN_MONTHLY_REPORT_HTML,
+                                  data=monthly_data,
+                                  month=month,
+                                  year=year,
+                                  month_name=datetime(int(year), int(month), 1).strftime('%B'),
+                                  branch=branch,
+                                  semester=semester,
+                                  section=section,
+                                  search_query=search_query,
+                                  branches=ALL_BRANCHES)
+
+@app.route('/admin/reports/semester')
+@login_required
+@admin_required
+def admin_semester_report():
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    search_query = request.args.get('search_query', '')
+    
+    query = Student.query.filter_by(is_semester_active=True)
+    
     if branch != 'all':
         query = query.filter_by(branch=branch)
+    if semester != 'all':
+        query = query.filter_by(current_semester=int(semester))
     if section != 'all':
         query = query.filter_by(section=section)
     
     students = query.all()
+    
+    # Apply search filter
+    if search_query:
+        students = [s for s in students 
+                   if search_query.lower() in s.name.lower() 
+                   or search_query.lower() in s.register_number.lower()]
+    
     student_data = [{'student': s, 'data': get_comprehensive_attendance(s)} for s in students]
     
-    return render_template_string(
-        ADMIN_STUDENT_SEMESTER_HTML,
-        student_data=student_data,
-        semester=semester,
-        branch=branch,
-        section=section,
-        branches=['ECE', 'CSE', 'EEE', 'CIVIL', 'MECH', 'DS', 'AIML'],
-        sections=['A', 'B', 'C']
-    )
+    return render_template_string(ADMIN_SEMESTER_REPORT_HTML,
+                                  student_data=student_data,
+                                  branch=branch,
+                                  semester=semester,
+                                  section=section,
+                                  search_query=search_query,
+                                  branches=ALL_BRANCHES)
 
 # ============================================
 # HTML TEMPLATES (Inline for single-file deployment)
@@ -1074,6 +1439,7 @@ BASE_TEMPLATE = """
         .btn-danger { background: #f56565; }
         .btn-warning { background: #ed8936; }
         .btn-info { background: #4299e1; }
+        .btn-secondary { background: #718096; }
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; margin-bottom: 5px; font-weight: 600; color: #333; }
         .form-control {
@@ -1165,9 +1531,35 @@ BASE_TEMPLATE = """
             flex-wrap: wrap;
             align-items: flex-end;
         }
+        .search-box {
+            flex: 1;
+            min-width: 250px;
+        }
+        .report-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 10px;
+        }
+        .report-tab {
+            padding: 10px 20px;
+            text-decoration: none;
+            color: #666;
+            border-radius: 6px;
+            transition: all 0.3s;
+        }
+        .report-tab.active {
+            background: #667eea;
+            color: white;
+        }
+        .report-tab:hover:not(.active) {
+            background: #f7fafc;
+        }
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: 1fr; }
             .filter-bar { flex-direction: column; }
+            .report-tabs { flex-wrap: wrap; }
         }
     </style>
     {% block extra_css %}{% endblock %}
@@ -1181,10 +1573,17 @@ BASE_TEMPLATE = """
                 {% if current_user.is_authenticated %}
                     {% if current_user.role == 'student' %}
                         <a href="{{ url_for('student_dashboard') }}">Dashboard</a>
+                        <a href="{{ url_for('student_daily_report') }}">Daily Report</a>
+                        <a href="{{ url_for('student_monthly_report') }}">Monthly Report</a>
+                        <a href="{{ url_for('student_semester_report') }}">Semester Report</a>
                     {% elif current_user.role == 'teacher' %}
                         <a href="{{ url_for('teacher_dashboard') }}">Dashboard</a>
+                        <a href="{{ url_for('teacher_daily_report') }}">Daily Reports</a>
+                        <a href="{{ url_for('teacher_monthly_report') }}">Monthly Reports</a>
+                        <a href="{{ url_for('teacher_semester_report') }}">Semester Reports</a>
                     {% elif current_user.role == 'admin' %}
                         <a href="{{ url_for('admin_dashboard') }}">Admin Panel</a>
+                        <a href="{{ url_for('admin_reports') }}">Reports</a>
                     {% endif %}
                     <a href="{{ url_for('logout') }}">Logout</a>
                 {% else %}
@@ -1204,7 +1603,7 @@ BASE_TEMPLATE = """
                     <div class="alert alert-{{ category }}">{{ message }}</div>
                 {% endfor %}
             {% endif %}
-        {% endwith %}
+        {% endblock %}
         
         {% block content %}{% endblock %}
     </div>
@@ -1342,6 +1741,13 @@ STUDENT_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
     </div>
     
     <div class="card">
+        <h3>Quick Links</h3>
+        <a href="{{ url_for('student_daily_report') }}" class="btn btn-info">Daily Report</a>
+        <a href="{{ url_for('student_monthly_report') }}" class="btn btn-info">Monthly Report</a>
+        <a href="{{ url_for('student_semester_report') }}" class="btn btn-info">Semester Report</a>
+    </div>
+    
+    <div class="card">
         <h3>Today's Attendance</h3>
         {% if today_attendance %}
         <table>
@@ -1360,6 +1766,129 @@ STUDENT_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
     </div>
 """)
 
+# NEW: Student Daily Report Template
+STUDENT_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Daily Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Daily Attendance Report</h2>
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Select Date</label>
+                <input type="date" name="date" class="form-control" value="{{ date.strftime('%Y-%m-%d') }}" onchange="this.form.submit()">
+            </div>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print Report</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Attendance for {{ date.strftime('%B %d, %Y') }}</h3>
+        {% if attendances %}
+        <table>
+            <tr><th>Period</th><th>Subject</th><th>Type</th><th>Status</th></tr>
+            {% for att in attendances %}
+            <tr>
+                <td>{{ att.period }}</td>
+                <td>{{ att.subject or 'N/A' }}</td>
+                <td>{{ att.attendance_type }}</td>
+                <td><span class="badge badge-{{ 'success' if att.status == 'present' else 'danger' }}">{{ att.status.upper() }}</span></td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No attendance records found for this date.</p>
+        {% endif %}
+    </div>
+""")
+
+# NEW: Student Monthly Report Template
+STUDENT_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Monthly Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Monthly Attendance Report</h2>
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Month</label>
+                <select name="month" class="form-control" onchange="this.form.submit()">
+                    {% for i in range(1, 13) %}
+                    <option value="{{ i }}" {{ 'selected' if month == i else '' }}>{{ datetime(2000, i, 1).strftime('%B') }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Year</label>
+                <select name="year" class="form-control" onchange="this.form.submit()">
+                    {% for y in range(2024, 2027) %}
+                    <option value="{{ y }}" {{ 'selected' if year == y else '' }}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print Report</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Summary for {{ month_name }} {{ year }}</h3>
+        <div class="stats-grid" style="margin-top: 20px;">
+            <div class="stat-card">
+                <div class="stat-number">{{ total_present }}/{{ total_classes }}</div>
+                <div class="stat-label">Present/Total</div>
+            </div>
+            <div class="stat-card" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+                <div class="stat-number">{{ "%.1f"|format(percentage) }}%</div>
+                <div class="stat-label">Attendance %</div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Detailed Records</h3>
+        {% if attendances %}
+        <table>
+            <tr><th>Date</th><th>Period</th><th>Subject</th><th>Type</th><th>Status</th></tr>
+            {% for att in attendances %}
+            <tr>
+                <td>{{ att.date.strftime('%d-%m-%Y') }}</td>
+                <td>{{ att.period }}</td>
+                <td>{{ att.subject or 'N/A' }}</td>
+                <td>{{ att.attendance_type }}</td>
+                <td><span class="badge badge-{{ 'success' if att.status == 'present' else 'danger' }}">{{ att.status.upper() }}</span></td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No attendance records found for this month.</p>
+        {% endif %}
+    </div>
+""")
+
+STUDENT_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Semester Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Semester Attendance Report</h2>
+    <div class="card" style="text-align: right;">
+        <button onclick="window.print()" class="btn btn-success">Print Report</button>
+    </div>
+    <div class="card">
+        <h3>Summary</h3>
+        <p><strong>Theory:</strong> {{ sem_data.theory_present }}/{{ sem_data.theory_total }} ({{ sem_data.theory_percentage|round(2) }}%)</p>
+        <p><strong>Practical:</strong> {{ sem_data.practical_present }}/{{ sem_data.practical_total }} ({{ sem_data.practical_percentage|round(2) }}%)</p>
+        <p><strong>Overall:</strong> {{ sem_data.present_periods }}/{{ sem_data.total_periods }} ({{ sem_data.overall_percentage|round(2) }}%)</p>
+    </div>
+    <div class="card">
+        <h3>Subject-wise Breakdown</h3>
+        <table>
+            <tr><th>Subject</th><th>Type</th><th>Present/Total</th><th>Percentage</th></tr>
+            {% for subject, data in sem_data.subject_wise.items() %}
+            <tr>
+                <td>{{ subject }}</td>
+                <td>{{ data.type }}</td>
+                <td>{{ data.present }}/{{ data.total }}</td>
+                <td>{{ data.percentage|round(2) }}%</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+""")
+
 TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Faculty Dashboard") \
     .replace("{% block content %}{% endblock %}", """
     <h2>Welcome, {{ teacher.name }}</h2>
@@ -1367,10 +1896,6 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
         <span class="badge badge-info">{{ teacher.role }}</span>
         <span class="badge badge-secondary">{{ teacher.branch }}</span>
     </div>
-    
-    {% if semester_stopped %}
-    <div class="stopped-banner">⚠️ Semester attendance is currently stopped</div>
-    {% endif %}
     
     <div class="stats-grid">
         <div class="stat-card">
@@ -1399,25 +1924,40 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
         {% endif %}
     </div>
     
-    {% if not semester_stopped %}
     <div class="card">
-        <h3>Mark Student Attendance</h3>
+        <h3>Quick Links</h3>
+        <a href="{{ url_for('teacher_daily_report') }}" class="btn btn-info">Daily Reports</a>
+        <a href="{{ url_for('teacher_monthly_report') }}" class="btn btn-info">Monthly Reports</a>
+        <a href="{{ url_for('teacher_semester_report') }}" class="btn btn-info">Semester Reports</a>
+    </div>
+    
+    <div class="card">
+        <h3>Mark Student Attendance (All Branches & Semesters)</h3>
         <div class="form-group">
-            <label>Section</label>
-            <select id="studentSection" class="form-control">
-                <option value="">Select</option>
-                <option value="A">A</option>
-                <option value="B">B</option>
-                <option value="C">C</option>
+            <label>Branch</label>
+            <select id="studentBranch" class="form-control" onchange="loadSubjects()">
+                <option value="">Select Branch</option>
+                {% for branch in ['ECE', 'CSE', 'EEE', 'CIVIL', 'MECH', 'DS', 'AIML'] %}
+                <option value="{{ branch }}">{{ branch }}</option>
+                {% endfor %}
             </select>
         </div>
         <div class="form-group">
             <label>Semester</label>
             <select id="studentSemester" class="form-control" onchange="loadSubjects()">
-                <option value="">Select</option>
+                <option value="">Select Semester</option>
                 {% for i in range(1, 9) %}
                 <option value="{{ i }}">Semester {{ i }}</option>
                 {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Section</label>
+            <select id="studentSection" class="form-control">
+                <option value="">Select Section</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
             </select>
         </div>
         <div class="form-group">
@@ -1452,7 +1992,6 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
             </table>
         </div>
     </div>
-    {% endif %}
 """) \
     .replace("{% block extra_js %}{% endblock %}", """
     <script>
@@ -1476,8 +2015,11 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
             }, err => alert('Location access denied'));
         }
         function loadSubjects() {
+            const branch = document.getElementById('studentBranch').value;
             const sem = document.getElementById('studentSemester').value;
-            fetch(`/teacher/get-subjects/{{ teacher.branch }}/${sem}`)
+            if(!branch || !sem) return;
+            
+            fetch(`/teacher/get-subjects/${branch}/${sem}`)
                 .then(r => r.json())
                 .then(subjects => {
                     const sel = document.getElementById('subjectSelect');
@@ -1491,13 +2033,14 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
                 });
         }
         function loadStudents() {
+            const branch = document.getElementById('studentBranch').value;
             const section = document.getElementById('studentSection').value;
             const semester = document.getElementById('studentSemester').value;
-            if(!section || !semester || selectedPeriods.length === 0) {
-                alert('Please select section, semester, and periods');
+            if(!branch || !section || !semester || selectedPeriods.length === 0) {
+                alert('Please select branch, semester, section, and periods');
                 return;
             }
-            fetch(`/teacher/get-students?branch={{ teacher.branch }}&semester=${semester}&section=${section}`)
+            fetch(`/teacher/get-students?branch=${branch}&semester=${semester}&section=${section}`)
                 .then(r => r.json())
                 .then(students => {
                     const tbody = document.getElementById('studentsTableBody');
@@ -1535,6 +2078,270 @@ TEACHER_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance Syst
             });
         }
     </script>
+""")
+
+# NEW: Teacher Daily Report Template
+TEACHER_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Daily Attendance Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Daily Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('teacher_daily_report') }}" class="report-tab active">Daily</a>
+        <a href="{{ url_for('teacher_monthly_report') }}" class="report-tab">Monthly</a>
+        <a href="{{ url_for('teacher_semester_report') }}" class="report-tab">Semester</a>
+    </div>
+    
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Date</label>
+                <input type="date" name="date" class="form-control" value="{{ date.strftime('%Y-%m-%d') }}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Branch</label>
+                <select name="branch" class="form-control">
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Semester</label>
+                <select name="semester" class="form-control">
+                    <option value="all" {{ 'selected' if semester == 'all' else '' }}>All Semesters</option>
+                    {% for i in range(1, 9) %}
+                    <option value="{{ i }}" {{ 'selected' if semester == str(i) else '' }}>Semester {{ i }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Section</label>
+                <select name="section" class="form-control">
+                    <option value="all" {{ 'selected' if section == 'all' else '' }}>All Sections</option>
+                    <option value="A" {{ 'selected' if section == 'A' else '' }}>A</option>
+                    <option value="B" {{ 'selected' if section == 'B' else '' }}>B</option>
+                    <option value="C" {{ 'selected' if section == 'C' else '' }}>C</option>
+                </select>
+            </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Search (Name/Roll No)</label>
+                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+            </div>
+            <button type="submit" class="btn btn-info">Filter</button>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Attendance for {{ date.strftime('%B %d, %Y') }}</h3>
+        {% if data %}
+        <table>
+            <tr>
+                <th>Roll No</th>
+                <th>Name</th>
+                <th>Branch</th>
+                <th>Sem</th>
+                <th>Sec</th>
+                <th>Present/Total</th>
+                <th>Percentage</th>
+            </tr>
+            {% for student_id, record in data.items() %}
+            <tr>
+                <td>{{ record.student.register_number }}</td>
+                <td>{{ record.student.name }}</td>
+                <td>{{ record.student.branch }}</td>
+                <td>{{ record.student.current_semester }}</td>
+                <td>{{ record.student.section }}</td>
+                <td>{{ record.present_count }}/{{ record.total_count }}</td>
+                <td>{{ "%.1f"|format((record.present_count/record.total_count*100) if record.total_count > 0 else 0) }}%</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No attendance records found for the selected criteria.</p>
+        {% endif %}
+    </div>
+""")
+
+# NEW: Teacher Monthly Report Template
+TEACHER_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Monthly Attendance Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Monthly Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('teacher_daily_report') }}" class="report-tab">Daily</a>
+        <a href="{{ url_for('teacher_monthly_report') }}" class="report-tab active">Monthly</a>
+        <a href="{{ url_for('teacher_semester_report') }}" class="report-tab">Semester</a>
+    </div>
+    
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Month</label>
+                <select name="month" class="form-control">
+                    {% for i in range(1, 13) %}
+                    <option value="{{ i }}" {{ 'selected' if month == str(i) else '' }}>{{ datetime(2000, i, 1).strftime('%B') }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Year</label>
+                <select name="year" class="form-control">
+                    {% for y in range(2024, 2027) %}
+                    <option value="{{ y }}" {{ 'selected' if year == y else '' }}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Branch</label>
+                <select name="branch" class="form-control">
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Semester</label>
+                <select name="semester" class="form-control">
+                    <option value="all" {{ 'selected' if semester == 'all' else '' }}>All Semesters</option>
+                    {% for i in range(1, 9) %}
+                    <option value="{{ i }}" {{ 'selected' if semester == str(i) else '' }}>Semester {{ i }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Section</label>
+                <select name="section" class="form-control">
+                    <option value="all" {{ 'selected' if section == 'all' else '' }}>All Sections</option>
+                    <option value="A" {{ 'selected' if section == 'A' else '' }}>A</option>
+                    <option value="B" {{ 'selected' if section == 'B' else '' }}>B</option>
+                    <option value="C" {{ 'selected' if section == 'C' else '' }}>C</option>
+                </select>
+            </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Search (Name/Roll No)</label>
+                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+            </div>
+            <button type="submit" class="btn btn-info">Filter</button>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Monthly Report for {{ month_name }} {{ year }}</h3>
+        {% if data %}
+        <table>
+            <tr>
+                <th>Roll No</th>
+                <th>Name</th>
+                <th>Branch</th>
+                <th>Sem</th>
+                <th>Sec</th>
+                <th>Theory %</th>
+                <th>Practical %</th>
+                <th>Overall %</th>
+            </tr>
+            {% for record in data %}
+            <tr>
+                <td>{{ record.student.register_number }}</td>
+                <td>{{ record.student.name }}</td>
+                <td>{{ record.student.branch }}</td>
+                <td>{{ record.student.current_semester }}</td>
+                <td>{{ record.student.section }}</td>
+                <td>{{ "%.1f"|format((record.theory_present/record.theory_total*100) if record.theory_total > 0 else 0) }}%</td>
+                <td>{{ "%.1f"|format((record.practical_present/record.practical_total*100) if record.practical_total > 0 else 0) }}%</td>
+                <td><strong>{{ "%.1f"|format(record.overall_percentage) }}%</strong></td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No records found for the selected criteria.</p>
+        {% endif %}
+    </div>
+""")
+
+# NEW: Teacher Semester Report Template
+TEACHER_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Semester Attendance Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Semester Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('teacher_daily_report') }}" class="report-tab">Daily</a>
+        <a href="{{ url_for('teacher_monthly_report') }}" class="report-tab">Monthly</a>
+        <a href="{{ url_for('teacher_semester_report') }}" class="report-tab active">Semester</a>
+    </div>
+    
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Branch</label>
+                <select name="branch" class="form-control">
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Semester</label>
+                <select name="semester" class="form-control">
+                    <option value="all" {{ 'selected' if semester == 'all' else '' }}>All Semesters</option>
+                    {% for i in range(1, 9) %}
+                    <option value="{{ i }}" {{ 'selected' if semester == str(i) else '' }}>Semester {{ i }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Section</label>
+                <select name="section" class="form-control">
+                    <option value="all" {{ 'selected' if section == 'all' else '' }}>All Sections</option>
+                    <option value="A" {{ 'selected' if section == 'A' else '' }}>A</option>
+                    <option value="B" {{ 'selected' if section == 'B' else '' }}>B</option>
+                    <option value="C" {{ 'selected' if section == 'C' else '' }}>C</option>
+                </select>
+            </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Search (Name/Roll No)</label>
+                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+            </div>
+            <button type="submit" class="btn btn-info">Filter</button>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Semester-wise Attendance Report</h3>
+        {% if student_data %}
+        <table>
+            <tr>
+                <th>Roll No</th>
+                <th>Name</th>
+                <th>Branch</th>
+                <th>Sem</th>
+                <th>Sec</th>
+                <th>Theory %</th>
+                <th>Practical %</th>
+                <th>Overall %</th>
+            </tr>
+            {% for item in student_data %}
+            <tr>
+                <td>{{ item.student.register_number }}</td>
+                <td>{{ item.student.name }}</td>
+                <td>{{ item.student.branch }}</td>
+                <td>{{ item.student.current_semester }}</td>
+                <td>{{ item.student.section }}</td>
+                <td>{{ "%.1f"|format(item.data.theory_percentage) }}%</td>
+                <td>{{ "%.1f"|format(item.data.practical_percentage) }}%</td>
+                <td><strong>{{ "%.1f"|format(item.data.overall_percentage) }}%</strong></td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No records found for the selected criteria.</p>
+        {% endif %}
+    </div>
 """)
 
 ADMIN_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Dashboard") \
@@ -1609,32 +2416,9 @@ ADMIN_DASHBOARD_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System
     <div class="card">
         <h3>Quick Links</h3>
         <a href="{{ url_for('add_subject') }}" class="btn btn-success">Manage Subjects</a>
-        <a href="{{ url_for('admin_student_semester_report') }}" class="btn btn-info">View Reports</a>
-    </div>
-""")
-
-STUDENT_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Semester Report") \
-    .replace("{% block content %}{% endblock %}", """
-    <h2>Semester Attendance Report</h2>
-    <div class="card">
-        <h3>Summary</h3>
-        <p><strong>Theory:</strong> {{ sem_data.theory_present }}/{{ sem_data.theory_total }} ({{ sem_data.theory_percentage|round(2) }}%)</p>
-        <p><strong>Practical:</strong> {{ sem_data.practical_present }}/{{ sem_data.practical_total }} ({{ sem_data.practical_percentage|round(2) }}%)</p>
-        <p><strong>Overall:</strong> {{ sem_data.present_periods }}/{{ sem_data.total_periods }} ({{ sem_data.overall_percentage|round(2) }}%)</p>
-    </div>
-    <div class="card">
-        <h3>Subject-wise Breakdown</h3>
-        <table>
-            <tr><th>Subject</th><th>Type</th><th>Present/Total</th><th>Percentage</th></tr>
-            {% for subject, data in sem_data.subject_wise.items() %}
-            <tr>
-                <td>{{ subject }}</td>
-                <td>{{ data.type }}</td>
-                <td>{{ data.present }}/{{ data.total }}</td>
-                <td>{{ data.percentage|round(2) }}%</td>
-            </tr>
-            {% endfor %}
-        </table>
+        <a href="{{ url_for('admin_daily_report') }}" class="btn btn-info">Daily Reports</a>
+        <a href="{{ url_for('admin_monthly_report') }}" class="btn btn-info">Monthly Reports</a>
+        <a href="{{ url_for('admin_semester_report') }}" class="btn btn-info">Semester Reports</a>
     </div>
 """)
 
@@ -1670,15 +2454,27 @@ ADMIN_SUBJECTS_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{
     </div>
 """)
 
-ADMIN_STUDENT_SEMESTER_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Student Reports") \
+# NEW: Admin Daily Report Template
+ADMIN_DAILY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Daily Report") \
     .replace("{% block content %}{% endblock %}", """
-    <h2>Student Semester Reports</h2>
+    <h2>Admin - Daily Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('admin_daily_report') }}" class="report-tab active">Daily</a>
+        <a href="{{ url_for('admin_monthly_report') }}" class="report-tab">Monthly</a>
+        <a href="{{ url_for('admin_semester_report') }}" class="report-tab">Semester</a>
+    </div>
+    
     <div class="card">
         <form method="get" class="filter-bar">
             <div class="form-group" style="margin-bottom:0;">
+                <label>Date</label>
+                <input type="date" name="date" class="form-control" value="{{ date.strftime('%Y-%m-%d') }}">
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
                 <label>Branch</label>
                 <select name="branch" class="form-control">
-                    <option value="all">All</option>
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
                     {% for b in branches %}
                     <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
                     {% endfor %}
@@ -1687,30 +2483,218 @@ ADMIN_STUDENT_SEMESTER_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance
             <div class="form-group" style="margin-bottom:0;">
                 <label>Semester</label>
                 <select name="semester" class="form-control">
+                    <option value="all" {{ 'selected' if semester == 'all' else '' }}>All Semesters</option>
                     {% for i in range(1, 9) %}
-                    <option value="{{ i }}" {{ 'selected' if semester == i else '' }}>Semester {{ i }}</option>
+                    <option value="{{ i }}" {{ 'selected' if semester == str(i) else '' }}>Semester {{ i }}</option>
                     {% endfor %}
                 </select>
             </div>
             <div class="form-group" style="margin-bottom:0;">
                 <label>Section</label>
                 <select name="section" class="form-control">
-                    <option value="all">All</option>
-                    {% for s in sections %}
-                    <option value="{{ s }}" {{ 'selected' if section == s else '' }}>{{ s }}</option>
-                    {% endfor %}
+                    <option value="all" {{ 'selected' if section == 'all' else '' }}>All Sections</option>
+                    <option value="A" {{ 'selected' if section == 'A' else '' }}>A</option>
+                    <option value="B" {{ 'selected' if section == 'B' else '' }}>B</option>
+                    <option value="C" {{ 'selected' if section == 'C' else '' }}>C</option>
                 </select>
             </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Search (Name/Roll No)</label>
+                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+            </div>
             <button type="submit" class="btn btn-info">Filter</button>
-            <a href="{{ url_for('admin_export_students_semester', branch=branch, semester=semester, section=section) }}" class="btn btn-success">Export PDF</a>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
         </form>
     </div>
+    
     <div class="card">
+        <h3>Daily Attendance for {{ date.strftime('%B %d, %Y') }}</h3>
+        {% if data %}
         <table>
             <tr>
                 <th>Roll No</th>
                 <th>Name</th>
-                <th>Section</th>
+                <th>Branch</th>
+                <th>Sem</th>
+                <th>Sec</th>
+                <th>Present/Total</th>
+                <th>Percentage</th>
+            </tr>
+            {% for student_id, record in data.items() %}
+            <tr>
+                <td>{{ record.student.register_number }}</td>
+                <td>{{ record.student.name }}</td>
+                <td>{{ record.student.branch }}</td>
+                <td>{{ record.student.current_semester }}</td>
+                <td>{{ record.student.section }}</td>
+                <td>{{ record.present_count }}/{{ record.total_count }}</td>
+                <td>{{ "%.1f"|format((record.present_count/record.total_count*100) if record.total_count > 0 else 0) }}%</td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No attendance records found for the selected criteria.</p>
+        {% endif %}
+    </div>
+""")
+
+# NEW: Admin Monthly Report Template
+ADMIN_MONTHLY_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Monthly Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Admin - Monthly Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('admin_daily_report') }}" class="report-tab">Daily</a>
+        <a href="{{ url_for('admin_monthly_report') }}" class="report-tab active">Monthly</a>
+        <a href="{{ url_for('admin_semester_report') }}" class="report-tab">Semester</a>
+    </div>
+    
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Month</label>
+                <select name="month" class="form-control">
+                    {% for i in range(1, 13) %}
+                    <option value="{{ i }}" {{ 'selected' if month == str(i) else '' }}>{{ datetime(2000, i, 1).strftime('%B') }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Year</label>
+                <select name="year" class="form-control">
+                    {% for y in range(2024, 2027) %}
+                    <option value="{{ y }}" {{ 'selected' if year == y else '' }}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Branch</label>
+                <select name="branch" class="form-control">
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Semester</label>
+                <select name="semester" class="form-control">
+                    <option value="all" {{ 'selected' if semester == 'all' else '' }}>All Semesters</option>
+                    {% for i in range(1, 9) %}
+                    <option value="{{ i }}" {{ 'selected' if semester == str(i) else '' }}>Semester {{ i }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Section</label>
+                <select name="section" class="form-control">
+                    <option value="all" {{ 'selected' if section == 'all' else '' }}>All Sections</option>
+                    <option value="A" {{ 'selected' if section == 'A' else '' }}>A</option>
+                    <option value="B" {{ 'selected' if section == 'B' else '' }}>B</option>
+                    <option value="C" {{ 'selected' if section == 'C' else '' }}>C</option>
+                </select>
+            </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Search (Name/Roll No)</label>
+                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+            </div>
+            <button type="submit" class="btn btn-info">Filter</button>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Monthly Report for {{ month_name }} {{ year }}</h3>
+        {% if data %}
+        <table>
+            <tr>
+                <th>Roll No</th>
+                <th>Name</th>
+                <th>Branch</th>
+                <th>Sem</th>
+                <th>Sec</th>
+                <th>Theory %</th>
+                <th>Practical %</th>
+                <th>Overall %</th>
+            </tr>
+            {% for record in data %}
+            <tr>
+                <td>{{ record.student.register_number }}</td>
+                <td>{{ record.student.name }}</td>
+                <td>{{ record.student.branch }}</td>
+                <td>{{ record.student.current_semester }}</td>
+                <td>{{ record.student.section }}</td>
+                <td>{{ "%.1f"|format((record.theory_present/record.theory_total*100) if record.theory_total > 0 else 0) }}%</td>
+                <td>{{ "%.1f"|format((record.practical_present/record.practical_total*100) if record.practical_total > 0 else 0) }}%</td>
+                <td><strong>{{ "%.1f"|format(record.overall_percentage) }}%</strong></td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No records found for the selected criteria.</p>
+        {% endif %}
+    </div>
+""")
+
+# NEW: Admin Semester Report Template
+ADMIN_SEMESTER_REPORT_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance System{% endblock %}", "Admin Semester Report") \
+    .replace("{% block content %}{% endblock %}", """
+    <h2>Admin - Semester Attendance Report</h2>
+    
+    <div class="report-tabs">
+        <a href="{{ url_for('admin_daily_report') }}" class="report-tab">Daily</a>
+        <a href="{{ url_for('admin_monthly_report') }}" class="report-tab">Monthly</a>
+        <a href="{{ url_for('admin_semester_report') }}" class="report-tab active">Semester</a>
+    </div>
+    
+    <div class="card">
+        <form method="get" class="filter-bar">
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Branch</label>
+                <select name="branch" class="form-control">
+                    <option value="all" {{ 'selected' if branch == 'all' else '' }}>All Branches</option>
+                    {% for b in branches %}
+                    <option value="{{ b }}" {{ 'selected' if branch == b else '' }}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Semester</label>
+                <select name="semester" class="form-control">
+                    <option value="all" {{ 'selected' if semester == 'all' else '' }}>All Semesters</option>
+                    {% for i in range(1, 9) %}
+                    <option value="{{ i }}" {{ 'selected' if semester == str(i) else '' }}>Semester {{ i }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+                <label>Section</label>
+                <select name="section" class="form-control">
+                    <option value="all" {{ 'selected' if section == 'all' else '' }}>All Sections</option>
+                    <option value="A" {{ 'selected' if section == 'A' else '' }}>A</option>
+                    <option value="B" {{ 'selected' if section == 'B' else '' }}>B</option>
+                    <option value="C" {{ 'selected' if section == 'C' else '' }}>C</option>
+                </select>
+            </div>
+            <div class="form-group search-box" style="margin-bottom:0;">
+                <label>Search (Name/Roll No)</label>
+                <input type="text" name="search_query" class="form-control" value="{{ search_query }}" placeholder="Enter name or roll number...">
+            </div>
+            <button type="submit" class="btn btn-info">Filter</button>
+            <button type="button" onclick="window.print()" class="btn btn-success">Print</button>
+        </form>
+    </div>
+    
+    <div class="card">
+        <h3>Semester-wise Attendance Report</h3>
+        {% if student_data %}
+        <table>
+            <tr>
+                <th>Roll No</th>
+                <th>Name</th>
+                <th>Branch</th>
+                <th>Sem</th>
+                <th>Sec</th>
                 <th>Theory %</th>
                 <th>Practical %</th>
                 <th>Overall %</th>
@@ -1719,13 +2703,18 @@ ADMIN_STUDENT_SEMESTER_HTML = BASE_TEMPLATE.replace("{% block title %}Attendance
             <tr>
                 <td>{{ item.student.register_number }}</td>
                 <td>{{ item.student.name }}</td>
+                <td>{{ item.student.branch }}</td>
+                <td>{{ item.student.current_semester }}</td>
                 <td>{{ item.student.section }}</td>
-                <td>{{ item.data.theory_percentage|round(1) }}%</td>
-                <td>{{ item.data.practical_percentage|round(1) }}%</td>
-                <td><strong>{{ item.data.overall_percentage|round(1) }}%</strong></td>
+                <td>{{ "%.1f"|format(item.data.theory_percentage) }}%</td>
+                <td>{{ "%.1f"|format(item.data.practical_percentage) }}%</td>
+                <td><strong>{{ "%.1f"|format(item.data.overall_percentage) }}%</strong></td>
             </tr>
             {% endfor %}
         </table>
+        {% else %}
+        <p>No records found for the selected criteria.</p>
+        {% endif %}
     </div>
 """)
 
