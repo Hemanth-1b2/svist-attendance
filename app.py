@@ -4,6 +4,9 @@
 # Production Version for Railway.app + TiDB
 # ============================================
 
+import pymysql
+pymysql.install_as_MySQLdb()
+
 import os
 import sys
 from datetime import datetime, timedelta
@@ -31,9 +34,16 @@ if not app.config['SECRET_KEY']:
     raise ValueError("SECRET_KEY environment variable is required")
 
 # TiDB Cloud Serverless Configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
-if not app.config['SQLALCHEMY_DATABASE_URI']:
-    raise ValueError("DATABASE_URL environment variable is required")
+# TiDB Cloud Serverless Configuration
+database_url = os.environ.get('DATABASE_URL')
+
+# Ensure we use pymysql driver
+if database_url and database_url.startswith('mysql://'):
+    database_url = database_url.replace('mysql://', 'mysql+pymysql://', 1)
+elif database_url and not database_url.startswith('mysql+pymysql://'):
+    database_url = 'mysql+pymysql://' + database_url
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 
 # Railway.app - Simplified engine options (no SSL CA needed for TiDB Serverless)
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
