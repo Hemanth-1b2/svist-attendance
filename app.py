@@ -14,7 +14,7 @@ from functools import wraps
 from io import BytesIO
 from calendar import monthrange
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file, render_template_string
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file, render_template_string, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_mail import Mail, Message
@@ -1086,13 +1086,13 @@ def get_students_for_attendance():
     if teacher.branch not in ['ADMIN', 'EXAMINATION'] and teacher.branch != branch:
         return jsonify({'error': 'Not authorized for this branch'}), 403
     
-    # FIXED: Sort by register_number instead of just ordering
+    # FIXED: Sort by register_number
     students = Student.query.filter_by(
         branch=branch,
         current_semester=int(semester),
         section=section,
         is_semester_active=True
-    ).order_by(Student.register_number.asc()).all()  # <-- Changed to register_number.asc()
+    ).order_by(Student.register_number.asc()).all()
     
     student_list = [{
         'id': s.id,
@@ -2347,6 +2347,7 @@ STUDENT_DASHBOARD_HTML = """
 </html>
 """
 
+# NEW: Student Daily Report with Print and PDF buttons
 STUDENT_DAILY_REPORT_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -2411,13 +2412,25 @@ STUDENT_DAILY_REPORT_HTML = """
             border: 2px solid #e2e8f0;
             border-radius: 5px;
         }
-        button {
+        button, .btn-print, .btn-pdf {
             padding: 0.5rem 1rem;
             background: #667eea;
             color: white;
             border: none;
             border-radius: 5px;
             cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+        .btn-print { background: #48bb78; }
+        .btn-pdf { background: #ed8936; }
+        .action-btns {
+            margin-bottom: 1.5rem;
+        }
+        @media print {
+            .navbar, .action-btns, .date-form, .back-link { display: none; }
+            .card { box-shadow: none; }
         }
     </style>
 </head>
@@ -2433,6 +2446,12 @@ STUDENT_DAILY_REPORT_HTML = """
                 <input type="date" name="date" value="{{ date.strftime('%Y-%m-%d') }}">
                 <button type="submit">View</button>
             </form>
+            
+            <div class="action-btns">
+                <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+                <a href="{{ url_for('download_pdf', report_type='daily', date=date.strftime('%Y-%m-%d')) }}" class="btn-pdf">📄 Download PDF</a>
+            </div>
+            
             {% if attendances %}
             <table>
                 <thead>
@@ -2466,6 +2485,7 @@ STUDENT_DAILY_REPORT_HTML = """
 </html>
 """
 
+# NEW: Student Monthly Report with Print and PDF buttons
 STUDENT_MONTHLY_REPORT_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -2538,6 +2558,23 @@ STUDENT_MONTHLY_REPORT_HTML = """
             border: none;
             cursor: pointer;
         }
+        .btn-print, .btn-pdf {
+            padding: 0.5rem 1rem;
+            background: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .btn-pdf { background: #ed8936; }
+        @media print {
+            .navbar, .month-form, .btn-print, .btn-pdf { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -2560,6 +2597,9 @@ STUDENT_MONTHLY_REPORT_HTML = """
                 </select>
                 <button type="submit">View</button>
             </form>
+            
+            <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf', report_type='monthly', month=month, year=year) }}" class="btn-pdf">📄 Download PDF</a>
             
             <div class="stats">
                 <div class="stat">
@@ -2605,6 +2645,7 @@ STUDENT_MONTHLY_REPORT_HTML = """
 </html>
 """
 
+# NEW: Student Semester Report with Print and PDF buttons
 STUDENT_SEMESTER_REPORT_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -2672,6 +2713,23 @@ STUDENT_SEMESTER_REPORT_HTML = """
             transition: width 0.3s;
         }
         .low { background: #fc8181; }
+        .btn-print, .btn-pdf {
+            padding: 0.5rem 1rem;
+            background: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .btn-pdf { background: #ed8936; }
+        @media print {
+            .navbar, .btn-print, .btn-pdf { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -2682,6 +2740,9 @@ STUDENT_SEMESTER_REPORT_HTML = """
         <div class="card">
             <h2>Semester {{ student.current_semester }} - Comprehensive Report</h2>
             <p style="color:#666;margin-bottom:1.5rem;">Period: {{ sem_data['start_date'].strftime('%d %b %Y') }} - {{ sem_data['end_date'].strftime('%d %b %Y') }}</p>
+            
+            <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf', report_type='semester') }}" class="btn-pdf">📄 Download PDF</a>
             
             <div class="main-stats">
                 <div class="stat-box">
@@ -3208,6 +3269,7 @@ TEACHER_ATTENDANCE_INTERFACE_HTML = """
 </html>
 """
 
+# NEW: Teacher Daily Report with Print and PDF buttons
 TEACHER_DAILY_REPORT_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -3273,6 +3335,23 @@ TEACHER_DAILY_REPORT_HTML = """
             border: none;
             cursor: pointer;
         }
+        .btn-print, .btn-pdf {
+            padding: 0.5rem 1rem;
+            background: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .btn-pdf { background: #ed8936; }
+        @media print {
+            .navbar, .date-form, .btn-print, .btn-pdf { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -3286,6 +3365,9 @@ TEACHER_DAILY_REPORT_HTML = """
                 <input type="date" name="date" value="{{ date.strftime('%Y-%m-%d') }}">
                 <button type="submit">View</button>
             </form>
+            
+            <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf_teacher', report_type='daily', date=date.strftime('%Y-%m-%d')) }}" class="btn-pdf">📄 Download PDF</a>
             
             {% if attendance %}
             <div class="status-box {% if attendance.status == 'present' %}status-present{% else %}status-absent{% endif %}">
@@ -3315,6 +3397,7 @@ TEACHER_DAILY_REPORT_HTML = """
 </html>
 """
 
+# NEW: Teacher Monthly Report with Print and PDF buttons
 TEACHER_MONTHLY_REPORT_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -3385,6 +3468,23 @@ TEACHER_MONTHLY_REPORT_HTML = """
             border: none;
             cursor: pointer;
         }
+        .btn-print, .btn-pdf {
+            padding: 0.5rem 1rem;
+            background: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        .btn-pdf { background: #ed8936; }
+        @media print {
+            .navbar, .month-form, .btn-print, .btn-pdf { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -3407,6 +3507,9 @@ TEACHER_MONTHLY_REPORT_HTML = """
                 </select>
                 <button type="submit">View</button>
             </form>
+            
+            <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf_teacher', report_type='monthly', month=month, year=year) }}" class="btn-pdf">📄 Download PDF</a>
             
             <div class="stats">
                 <div class="stat">
@@ -3451,6 +3554,7 @@ TEACHER_MONTHLY_REPORT_HTML = """
 </html>
 """
 
+# NEW: Teacher Yearly Report with Print and PDF buttons
 TEACHER_YEARLY_REPORT_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -3513,6 +3617,23 @@ TEACHER_YEARLY_REPORT_HTML = """
             color: #667eea;
             margin-bottom: 0.5rem;
         }
+        .btn-print, .btn-pdf {
+            padding: 0.5rem 1rem;
+            background: #48bb78;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-right: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .btn-pdf { background: #ed8936; }
+        @media print {
+            .navbar, .year-form, .btn-print, .btn-pdf { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -3530,6 +3651,9 @@ TEACHER_YEARLY_REPORT_HTML = """
                 </select>
                 <button type="submit">View</button>
             </form>
+            
+            <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf_teacher', report_type='yearly', year=year) }}" class="btn-pdf">📄 Download PDF</a>
             
             <div style="margin-bottom:1.5rem;">
                 <p><strong>Registration Date:</strong> {{ yearly_data['start_date'].strftime('%d %b %Y') }}</p>
@@ -4035,7 +4159,7 @@ ADMIN_MANAGE_SUBJECTS_HTML = """
 </html>
 """
 
-# FIXED: Updated admin student reports template with semester option
+# FIXED: Updated admin student reports template with Print, PDF, and semester option
 ADMIN_STUDENT_REPORTS_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -4090,6 +4214,8 @@ ADMIN_STUDENT_REPORTS_HTML = """
             display: inline-block;
         }
         .btn-success { background: #48bb78; }
+        .btn-print { background: #4299e1; }
+        .btn-pdf { background: #ed8936; }
         table {
             width: 100%;
             border-collapse: collapse;
@@ -4101,6 +4227,13 @@ ADMIN_STUDENT_REPORTS_HTML = """
         }
         th { background: #f7fafc; }
         .low-attendance { color: #e53e3e; font-weight: 600; }
+        .action-btns {
+            margin-bottom: 1.5rem;
+        }
+        @media print {
+            .navbar, .filters, form, .action-btns { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -4175,6 +4308,10 @@ ADMIN_STUDENT_REPORTS_HTML = """
         {% if data %}
         <div class="card">
             <h3>Report Results</h3>
+            <div class="action-btns">
+                <button class="btn btn-print" onclick="window.print()">🖨️ Print</button>
+                <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-pdf">📄 Download PDF</a>
+            </div>
             {% if report_type == 'daily' %}
             <table>
                 <thead>
@@ -4280,7 +4417,7 @@ ADMIN_STUDENT_REPORTS_HTML = """
 </html>
 """
 
-# FIXED: Updated admin teacher reports template (no JOIN issues, but cleaned up)
+# FIXED: Updated admin teacher reports template with Print and PDF buttons
 ADMIN_TEACHER_REPORTS_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -4342,6 +4479,15 @@ ADMIN_TEACHER_REPORTS_HTML = """
             border-bottom: 1px solid #e2e8f0;
         }
         th { background: #f7fafc; }
+        .btn-print { background: #4299e1; }
+        .btn-pdf { background: #ed8936; }
+        .action-btns {
+            margin-bottom: 1.5rem;
+        }
+        @media print {
+            .navbar, .filters, form, .action-btns { display: none; }
+            .card { box-shadow: none; }
+        }
     </style>
 </head>
 <body>
@@ -4390,6 +4536,10 @@ ADMIN_TEACHER_REPORTS_HTML = """
         {% if data %}
         <div class="card">
             <h3>Teacher Attendance</h3>
+            <div class="action-btns">
+                <button class="btn btn-print" onclick="window.print()">🖨️ Print</button>
+                <a href="{{ url_for('download_pdf_admin_teacher', branch=selected_branch, name=name, month=month, year=year) }}" class="btn btn-pdf">📄 Download PDF</a>
+            </div>
             <table>
                 <thead>
                     <tr>
@@ -4426,40 +4576,454 @@ ADMIN_TEACHER_REPORTS_HTML = """
 """
 
 # ============================================
+# PDF GENERATION ROUTES
+# ============================================
+
+# Student PDF download routes
+@app.route('/download-pdf/student')
+@login_required
+def download_pdf():
+    """Generate PDF for student reports"""
+    if current_user.role != 'student':
+        return redirect(url_for('login'))
+    
+    report_type = request.args.get('report_type', 'daily')
+    student = current_user.student
+    
+    # Create HTML content for PDF
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #667eea; text-align: center; }}
+            h2 {{ color: #333; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
+            th {{ background-color: #667eea; color: white; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .logo {{ font-size: 24px; margin-bottom: 10px; }}
+            .info {{ margin-bottom: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">🎓 SVIST Attendance System</div>
+            <h1>Sree Vahini Institute of Science and Technology</h1>
+            <p>Student Attendance Report</p>
+        </div>
+        
+        <div class="info">
+            <p><strong>Student Name:</strong> {student.name}</p>
+            <p><strong>Register Number:</strong> {student.register_number}</p>
+            <p><strong>Branch:</strong> {student.branch}</p>
+            <p><strong>Semester:</strong> {student.current_semester}</p>
+            <p><strong>Section:</strong> {student.section}</p>
+            <p><strong>Generated:</strong> {datetime.now().strftime('%d %b %Y %H:%M')}</p>
+        </div>
+    """
+    
+    if report_type == 'daily':
+        date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+        report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        attendances = Attendance.query.filter_by(student_id=student.id, date=report_date).order_by(Attendance.period).all()
+        
+        html_content += f"<h2>Daily Report - {report_date.strftime('%d %B %Y')}</h2>"
+        html_content += "<table><thead><tr><th>Period</th><th>Subject</th><th>Type</th><th>Status</th></tr></thead><tbody>"
+        
+        for att in attendances:
+            html_content += f"<tr><td>{att.period}</td><td>{att.subject or '-'}</td><td>{att.attendance_type.title()}</td><td>{att.status.title()}</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    elif report_type == 'monthly':
+        month = int(request.args.get('month', datetime.now().month))
+        year = int(request.args.get('year', datetime.now().year))
+        
+        start_date = datetime(year, month, 1).date()
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+        else:
+            end_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
+        
+        attendances = Attendance.query.filter(
+            Attendance.student_id == student.id,
+            Attendance.date >= start_date,
+            Attendance.date <= end_date
+        ).order_by(Attendance.date, Attendance.period).all()
+        
+        total_present = sum(1 for a in attendances if a.status == 'present')
+        total_classes = len(attendances)
+        percentage = (total_present/total_classes*100) if total_classes > 0 else 0
+        
+        html_content += f"<h2>Monthly Report - {datetime(year, month, 1).strftime('%B %Y')}</h2>"
+        html_content += f"<p><strong>Total Present:</strong> {total_present} | <strong>Total Classes:</strong> {total_classes} | <strong>Percentage:</strong> {percentage:.1f}%</p>"
+        html_content += "<table><thead><tr><th>Date</th><th>Period</th><th>Subject</th><th>Type</th><th>Status</th></tr></thead><tbody>"
+        
+        for att in attendances:
+            html_content += f"<tr><td>{att.date.strftime('%d %b %Y')}</td><td>{att.period}</td><td>{att.subject or '-'}</td><td>{att.attendance_type.title()}</td><td>{att.status.title()}</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    elif report_type == 'semester':
+        sem_data = get_comprehensive_attendance(student)
+        
+        html_content += f"<h2>Semester Report - Semester {student.current_semester}</h2>"
+        html_content += f"<p><strong>Period:</strong> {sem_data['start_date'].strftime('%d %b %Y')} - {sem_data['end_date'].strftime('%d %b %Y')}</p>"
+        html_content += f"<p><strong>Overall Attendance:</strong> {sem_data['overall_percentage']:.1f}%</p>"
+        html_content += f"<p><strong>Theory:</strong> {sem_data['theory_present']}/{sem_data['theory_total']} ({sem_data['theory_percentage']:.1f}%)</p>"
+        html_content += f"<p><strong>Practical:</strong> {sem_data['practical_present']}/{sem_data['practical_total']} ({sem_data['practical_percentage']:.1f}%)</p>"
+        
+        html_content += "<h3>Subject-wise Breakdown</h3>"
+        html_content += "<table><thead><tr><th>Subject</th><th>Type</th><th>Present</th><th>Total</th><th>Percentage</th></tr></thead><tbody>"
+        
+        for subject, data in sem_data['subject_wise'].items():
+            html_content += f"<tr><td>{subject}</td><td>{data['type'].title()}</td><td>{data['present']}</td><td>{data['total']}</td><td>{data['percentage']:.1f}%</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    html_content += "</body></html>"
+    
+    # Generate PDF using pdfkit or return HTML for browser print
+    # For now, return HTML with print dialog
+    response = make_response(html_content)
+    response.headers['Content-Type'] = 'text/html'
+    return response
+
+# Teacher PDF download routes
+@app.route('/download-pdf/teacher')
+@login_required
+def download_pdf_teacher():
+    """Generate PDF for teacher reports"""
+    if current_user.role != 'teacher':
+        return redirect(url_for('login'))
+    
+    report_type = request.args.get('report_type', 'daily')
+    teacher = current_user.teacher
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #667eea; text-align: center; }}
+            h2 {{ color: #333; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
+            th {{ background-color: #667eea; color: white; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .logo {{ font-size: 24px; margin-bottom: 10px; }}
+            .info {{ margin-bottom: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">🎓 SVIST Attendance System</div>
+            <h1>Sree Vahini Institute of Science and Technology</h1>
+            <p>Teacher Attendance Report</p>
+        </div>
+        
+        <div class="info">
+            <p><strong>Teacher Name:</strong> {teacher.name}</p>
+            <p><strong>Employee ID:</strong> {teacher.employee_id}</p>
+            <p><strong>Branch:</strong> {teacher.branch}</p>
+            <p><strong>Role:</strong> {teacher.role}</p>
+            <p><strong>Generated:</strong> {datetime.now().strftime('%d %b %Y %H:%M')}</p>
+        </div>
+    """
+    
+    if report_type == 'daily':
+        date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+        report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        attendance = TeacherAttendance.query.filter_by(teacher_id=teacher.id, date=report_date).first()
+        
+        html_content += f"<h2>Daily Report - {report_date.strftime('%d %B %Y')}</h2>"
+        
+        if attendance:
+            html_content += f"<p><strong>Status:</strong> {attendance.status.title()}</p>"
+            if attendance.check_in:
+                html_content += f"<p><strong>Check-in:</strong> {attendance.check_in.strftime('%H:%M')}</p>"
+            if attendance.check_out:
+                html_content += f"<p><strong>Check-out:</strong> {attendance.check_out.strftime('%H:%M')}</p>"
+            html_content += f"<p><strong>Location Verified:</strong> {'Yes' if attendance.location_verified else 'No'}</p>"
+        else:
+            html_content += "<p>No attendance record found for this date.</p>"
+    
+    elif report_type == 'monthly':
+        month = int(request.args.get('month', datetime.now().month))
+        year = int(request.args.get('year', datetime.now().year))
+        
+        start_date = datetime(year, month, 1).date()
+        if month == 12:
+            end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+        else:
+            end_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
+        
+        attendances = TeacherAttendance.query.filter(
+            TeacherAttendance.teacher_id == teacher.id,
+            TeacherAttendance.date >= start_date,
+            TeacherAttendance.date <= end_date
+        ).order_by(TeacherAttendance.date).all()
+        
+        total_present = sum(1 for a in attendances if a.status == 'present')
+        
+        html_content += f"<h2>Monthly Report - {datetime(year, month, 1).strftime('%B %Y')}</h2>"
+        html_content += f"<p><strong>Days Present:</strong> {total_present} | <strong>Total Records:</strong> {len(attendances)}</p>"
+        html_content += "<table><thead><tr><th>Date</th><th>Check In</th><th>Check Out</th><th>Status</th></tr></thead><tbody>"
+        
+        for att in attendances:
+            check_in = att.check_in.strftime('%H:%M') if att.check_in else '-'
+            check_out = att.check_out.strftime('%H:%M') if att.check_out else '-'
+            html_content += f"<tr><td>{att.date.strftime('%d %b %Y')}</td><td>{check_in}</td><td>{check_out}</td><td>{att.status.title()}</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    elif report_type == 'yearly':
+        year = int(request.args.get('year', datetime.now().year))
+        yearly_data = get_teacher_yearly_attendance(teacher, year)
+        
+        html_content += f"<h2>Yearly Report - {year}</h2>"
+        html_content += f"<p><strong>Registration Date:</strong> {yearly_data['start_date'].strftime('%d %b %Y')}</p>"
+        html_content += f"<p><strong>Days Present:</strong> {yearly_data['total_days_present']}</p>"
+        html_content += f"<p><strong>Working Days:</strong> {yearly_data['working_days']}</p>"
+        html_content += f"<p><strong>Attendance Rate:</strong> {yearly_data['percentage']:.1f}%</p>"
+        
+        html_content += "<h3>Monthly Breakdown</h3>"
+        html_content += "<table><thead><tr><th>Month</th><th>Days Present</th></tr></thead><tbody>"
+        
+        for month_key, data in sorted(yearly_data['monthly_breakdown'].items()):
+            html_content += f"<tr><td>{data['month_name']}</td><td>{data['days_present']}</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    html_content += "</body></html>"
+    
+    response = make_response(html_content)
+    response.headers['Content-Type'] = 'text/html'
+    return response
+
+# Admin PDF download routes
+@app.route('/download-pdf/admin/students')
+@login_required
+@admin_required
+def download_pdf_admin():
+    """Generate PDF for admin student reports"""
+    report_type = request.args.get('report_type', 'daily')
+    branch = request.args.get('branch', 'all')
+    semester = request.args.get('semester', 'all')
+    section = request.args.get('section', 'all')
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #667eea; text-align: center; }}
+            h2 {{ color: #333; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }}
+            th, td {{ padding: 8px; border: 1px solid #ddd; text-align: left; }}
+            th {{ background-color: #667eea; color: white; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .logo {{ font-size: 24px; margin-bottom: 10px; }}
+            .info {{ margin-bottom: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">🎓 SVIST Attendance System</div>
+            <h1>Sree Vahini Institute of Science and Technology</h1>
+            <p>Admin Student Attendance Report</p>
+        </div>
+        
+        <div class="info">
+            <p><strong>Report Type:</strong> {report_type.title()}</p>
+            <p><strong>Branch:</strong> {branch.upper()}</p>
+            <p><strong>Semester:</strong> {semester}</p>
+            <p><strong>Section:</strong> {section.upper()}</p>
+            <p><strong>Generated:</strong> {datetime.now().strftime('%d %b %Y %H:%M')}</p>
+        </div>
+    """
+    
+    if report_type == 'daily':
+        date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+        report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        data = get_daily_attendance(branch, semester, section, report_date)
+        
+        html_content += f"<h2>Daily Report - {report_date.strftime('%d %B %Y')}</h2>"
+        html_content += "<table><thead><tr><th>Register No</th><th>Name</th><th>Branch</th><th>Sem</th><th>Sec</th><th>Present</th><th>Total</th><th>%</th></tr></thead><tbody>"
+        
+        for student_id, info in data.items():
+            student = info['student']
+            percentage = (info['present_count'] / info['total_count'] * 100) if info['total_count'] > 0 else 0
+            html_content += f"<tr><td>{student.register_number}</td><td>{student.name}</td><td>{student.branch}</td><td>{student.current_semester}</td><td>{student.section}</td><td>{info['present_count']}</td><td>{info['total_count']}</td><td>{percentage:.1f}%</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    elif report_type == 'monthly':
+        month = int(request.args.get('month', datetime.now().month))
+        year = int(request.args.get('year', datetime.now().year))
+        data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, year)
+        
+        html_content += f"<h2>Monthly Report - {datetime(year, month, 1).strftime('%B %Y')}</h2>"
+        html_content += "<table><thead><tr><th>Register No</th><th>Name</th><th>Branch</th><th>Sem</th><th>Sec</th><th>Theory</th><th>Practical</th><th>Overall %</th></tr></thead><tbody>"
+        
+        for item in data:
+            student = item['student']
+            html_content += f"<tr><td>{student.register_number}</td><td>{student.name}</td><td>{student.branch}</td><td>{student.current_semester}</td><td>{student.section}</td><td>{item['theory_present']}/{item['theory_total']}</td><td>{item['practical_present']}/{item['practical_total']}</td><td>{item['overall_percentage']:.1f}%</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    elif report_type == 'semester':
+        data = get_semester_attendance(branch, semester, section)
+        
+        html_content += f"<h2>Semester Report</h2>"
+        html_content += "<table><thead><tr><th>Register No</th><th>Name</th><th>Branch</th><th>Sem</th><th>Sec</th><th>Theory %</th><th>Practical %</th><th>Overall %</th></tr></thead><tbody>"
+        
+        for item in data:
+            student = item['student']
+            html_content += f"<tr><td>{student.register_number}</td><td>{student.name}</td><td>{student.branch}</td><td>{student.current_semester}</td><td>{student.section}</td><td>{item['theory_percentage']:.1f}%</td><td>{item['practical_percentage']:.1f}%</td><td>{item['overall_percentage']:.1f}%</td></tr>"
+        
+        html_content += "</tbody></table>"
+    
+    html_content += "</body></html>"
+    
+    response = make_response(html_content)
+    response.headers['Content-Type'] = 'text/html'
+    return response
+
+@app.route('/download-pdf/admin/teachers')
+@login_required
+@admin_required
+def download_pdf_admin_teacher():
+    """Generate PDF for admin teacher reports"""
+    branch = request.args.get('branch', 'all')
+    name = request.args.get('name', '')
+    month = request.args.get('month')
+    year = request.args.get('year')
+    
+    data = get_teacher_attendance_report(
+        branch if branch != 'all' else None,
+        name if name else None,
+        month,
+        year
+    )
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #667eea; text-align: center; }}
+            h2 {{ color: #333; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            th, td {{ padding: 10px; border: 1px solid #ddd; text-align: left; }}
+            th {{ background-color: #667eea; color: white; }}
+            .header {{ text-align: center; margin-bottom: 30px; }}
+            .logo {{ font-size: 24px; margin-bottom: 10px; }}
+            .info {{ margin-bottom: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="logo">🎓 SVIST Attendance System</div>
+            <h1>Sree Vahini Institute of Science and Technology</h1>
+            <p>Admin Teacher Attendance Report</p>
+        </div>
+        
+        <div class="info">
+            <p><strong>Branch:</strong> {branch.upper()}</p>
+            <p><strong>Name Filter:</strong> {name or 'All'}</p>
+            <p><strong>Month:</strong> {month if month else 'All'}</p>
+            <p><strong>Year:</strong> {year if year else 'All'}</p>
+            <p><strong>Generated:</strong> {datetime.now().strftime('%d %b %Y %H:%M')}</p>
+        </div>
+        
+        <h2>Teacher Attendance</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Employee ID</th>
+                    <th>Name</th>
+                    <th>Branch</th>
+                    <th>Role</th>
+                    <th>Present Days</th>
+                    <th>Total Days</th>
+                    <th>Percentage</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    
+    for item in data:
+        teacher = item['teacher']
+        percentage = (item['present_days'] / item['total_days'] * 100) if item['total_days'] > 0 else 0
+        html_content += f"<tr><td>{teacher.employee_id}</td><td>{teacher.name}</td><td>{teacher.branch}</td><td>{teacher.role}</td><td>{item['present_days']}</td><td>{item['total_days']}</td><td
+                {percentage:.1f}%</td></tr>"
+    
+    html_content += """
+            </tbody>
+        </table>
+    </body>
+    </html>
+    """
+    
+    response = make_response(html_content)
+    response.headers['Content-Type'] = 'text/html'
+    return response
+
+# ============================================
 # ERROR HANDLERS
 # ============================================
 
 @app.errorhandler(404)
 def not_found_error(error):
     return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Page Not Found</title></head>
-        <body style="text-align:center;padding:50px;font-family:Arial;">
-            <h1>404 - Page Not Found</h1>
-            <p>The requested page could not be found.</p>
-            <a href="/">Go Home</a>
-        </body>
-        </html>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>404 - Page Not Found</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+            h1 { color: #e53e3e; }
+            a { color: #667eea; }
+        </style>
+    </head>
+    <body>
+        <h1>404 - Page Not Found</h1>
+        <p>The page you are looking for does not exist.</p>
+        <a href="/">Go Home</a>
+    </body>
+    </html>
     """), 404
 
 @app.errorhandler(500)
 def internal_error(error):
     db.session.rollback()
     return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head><title>Server Error</title></head>
-        <body style="text-align:center;padding:50px;font-family:Arial;">
-            <h1>500 - Internal Server Error</h1>
-            <p>Something went wrong on our end. Please try again later.</p>
-            <a href="/">Go Home</a>
-        </body>
-        </html>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>500 - Internal Server Error</title>
+        <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+            h1 { color: #e53e3e; }
+            a { color: #667eea; }
+        </style>
+    </head>
+    <body>
+        <h1>500 - Internal Server Error</h1>
+        <p>Something went wrong on our end. Please try again later.</p>
+        <a href="/">Go Home</a>
+    </body>
+    </html>
     """), 500
 
 # ============================================
-# MAIN ENTRY POINT
+# APPLICATION ENTRY POINT
 # ============================================
 
 if __name__ == '__main__':
@@ -4467,9 +5031,22 @@ if __name__ == '__main__':
     with app.app_context():
         try:
             db.create_all()
-            print("Database tables created successfully")
+            print("Database tables created successfully!")
+            
+            # Create default admin if no admin exists
+            admin_exists = User.query.filter_by(role='admin').first()
+            if not admin_exists:
+                default_admin = User(
+                    email='admin@svist.edu.in',
+                    password_hash=generate_password_hash('admin123'),
+                    role='admin'
+                )
+                db.session.add(default_admin)
+                db.session.commit()
+                print("Default admin created: admin@svist.edu.in / admin123")
+                
         except Exception as e:
-            print(f"Error creating tables: {e}")
+            print(f"Database initialization error: {e}")
     
     # Run the application
     port = int(os.environ.get('PORT', 5000))
