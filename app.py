@@ -4961,8 +4961,7 @@ def download_pdf_admin_teacher():
     for item in data:
         teacher = item['teacher']
         percentage = (item['present_days'] / item['total_days'] * 100) if item['total_days'] > 0 else 0
-        html_content += f"<tr><td>{teacher.employee_id}</td><td>{teacher.name}</td><td>{teacher.branch}</td><td>{teacher.role}</td><td>{item['present_days']}</td><td>{item['total_days']}</td><td
-                {percentage:.1f}%</td></tr>"
+        html_content += f"<tr><td>{teacher.employee_id}</td><td>{teacher.name}</td><td>{teacher.branch}</td><td>{teacher.role}</td><td>{item['present_days']}</td><td>{item['total_days']}</td><td>{percentage:.1f}%</td></tr>"
     
     html_content += """
             </tbody>
