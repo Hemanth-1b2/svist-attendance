@@ -40,7 +40,12 @@ app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
     'pool_size': 5,
     'max_overflow': 10,
     'pool_recycle': 3600,
-    'pool_pre_ping': True
+    'pool_pre_ping': True,
+    'connect_args': {
+        'ssl': {
+            'ssl_mode': 'VERIFY_IDENTITY'
+        }
+    }
 }
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -48,9 +53,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAIL_SERVER'] = os.environ.get('MAIL_SERVER', 'smtp.gmail.com')
 app.config['MAIL_PORT'] = int(os.environ.get('MAIL_PORT', 587))
 app.config['MAIL_USE_TLS'] = os.environ.get('MAIL_USE_TLS', 'true').lower() == 'true'
-app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')
-app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')
-app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('MAIL_DEFAULT_SENDER')
+app.config['MAIL_USERNAME'] = os.environ.get('svistattendance7@gmail.com')
+app.config['MAIL_PASSWORD'] = os.environ.get('jjdz rizt ccli ojsr')
+app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('svistattendance7@gmail.com')
 
 # GPS Configuration
 COLLEGE_LAT = float(os.environ.get('COLLEGE_LAT', 17.1000))
