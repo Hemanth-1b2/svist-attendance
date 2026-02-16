@@ -1086,12 +1086,13 @@ def get_students_for_attendance():
     if teacher.branch not in ['ADMIN', 'EXAMINATION'] and teacher.branch != branch:
         return jsonify({'error': 'Not authorized for this branch'}), 403
     
+    # FIXED: Sort by register_number instead of just ordering
     students = Student.query.filter_by(
         branch=branch,
         current_semester=int(semester),
         section=section,
         is_semester_active=True
-    ).order_by(Student.register_number).all()
+    ).order_by(Student.register_number.asc()).all()  # <-- Changed to register_number.asc()
     
     student_list = [{
         'id': s.id,
