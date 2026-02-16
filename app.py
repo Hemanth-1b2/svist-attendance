@@ -444,26 +444,31 @@ def get_teacher_yearly_attendance(teacher, year=None):
         'monthly_breakdown': monthly_data
     }
 
+# FIXED: Removed multiple JOINs issue
 def get_daily_attendance(branch, semester, section, date):
     """Get daily attendance report"""
-    query = Attendance.query.filter_by(date=date)
+    # Start with base query joining Student once
+    query = db.session.query(Attendance, Student).join(
+        Student, Attendance.student_id == Student.id
+    ).filter(Attendance.date == date)
     
+    # Apply filters without creating additional joins
     if branch != 'all':
-        query = query.join(Student).filter(Student.branch == branch)
+        query = query.filter(Student.branch == branch)
     if semester != 'all':
-        query = query.join(Student).filter(Student.current_semester == int(semester))
+        query = query.filter(Student.current_semester == int(semester))
     if section != 'all':
-        query = query.join(Student).filter(Student.section == section)
+        query = query.filter(Student.section == section)
     
-    attendances = query.all()
+    results = query.all()
     
     # Group by student
     student_attendance = {}
-    for att in attendances:
-        student_id = att.student_id
+    for att, student in results:
+        student_id = student.id
         if student_id not in student_attendance:
             student_attendance[student_id] = {
-                'student': att.student,
+                'student': student,
                 'periods': [],
                 'present_count': 0,
                 'total_count': 0
@@ -480,6 +485,7 @@ def get_daily_attendance(branch, semester, section, date):
     
     return student_attendance
 
+# FIXED: Removed multiple JOINs issue
 def get_monthly_attendance(branch, semester, section, month, year):
     """Get monthly attendance report"""
     start_date = datetime(year, int(month), 1).date()
@@ -488,6 +494,7 @@ def get_monthly_attendance(branch, semester, section, month, year):
     else:
         end_date = datetime(year, int(month) + 1, 1).date() - timedelta(days=1)
     
+    # Build base query
     query = Student.query.filter_by(is_semester_active=True)
     
     if branch != 'all':
@@ -523,6 +530,53 @@ def get_monthly_attendance(branch, semester, section, month, year):
     
     return monthly_data, start_date, end_date
 
+# NEW: Semester-wise attendance for admin
+def get_semester_attendance(branch, semester, section):
+    """Get semester-wise attendance report for admin"""
+    # Build base query
+    query = Student.query.filter_by(is_semester_active=True)
+    
+    if branch != 'all':
+        query = query.filter_by(branch=branch)
+    if semester != 'all':
+        query = query.filter_by(current_semester=int(semester))
+    if section != 'all':
+        query = query.filter_by(section=section)
+    
+    students = query.all()
+    semester_data = []
+    
+    for student in students:
+        # Get all attendance for this student's current semester
+        attendances = Attendance.query.filter(
+            Attendance.student_id == student.id,
+            Attendance.semester_at_time == student.current_semester
+        ).all()
+        
+        theory_present = sum(1 for a in attendances if a.attendance_type == 'theory' and a.status == 'present')
+        theory_total = sum(1 for a in attendances if a.attendance_type == 'theory')
+        practical_present = sum(1 for a in attendances if a.attendance_type in ['lab', 'crt', 'workshop'] and a.status == 'present')
+        practical_total = sum(1 for a in attendances if a.attendance_type in ['lab', 'crt', 'workshop'])
+        
+        total_present = theory_present + practical_present
+        total_classes = theory_total + practical_total
+        
+        semester_data.append({
+            'student': student,
+            'theory_present': theory_present,
+            'theory_total': theory_total,
+            'theory_percentage': (theory_present / theory_total * 100) if theory_total > 0 else 0,
+            'practical_present': practical_present,
+            'practical_total': practical_total,
+            'practical_percentage': (practical_present / practical_total * 100) if practical_total > 0 else 0,
+            'total_present': total_present,
+            'total_classes': total_classes,
+            'overall_percentage': (total_present / total_classes * 100) if total_classes > 0 else 0
+        })
+    
+    return semester_data
+
+# FIXED: Removed multiple JOINs issue for teacher reports
 def get_teacher_attendance_report(branch=None, name=None, month=None, year=None):
     """Get teacher attendance report for admin"""
     query = Teacher.query
@@ -959,7 +1013,7 @@ def mark_student_attendance():
     
     student = Student.query.get(student_id)
     if not student:
-                return jsonify({'error': 'Student not found'}), 404
+        return jsonify({'error': 'Student not found'}), 404
     
     # Check if semester is stopped for this student's branch/semester
     if is_semester_stopped(student.branch, student.current_semester) or not student.is_semester_active:
@@ -1364,6 +1418,7 @@ def admin_delete_subject(subject_id):
         flash('Failed to delete subject', 'danger')
     return redirect(url_for('admin_manage_subjects'))
 
+# FIXED: Updated admin student reports with semester option
 @app.route('/admin/student-reports')
 @login_required
 @admin_required
@@ -1393,6 +1448,8 @@ def admin_student_reports():
         data = get_daily_attendance(branch, semester, section, report_date)
     elif report_type == 'monthly':
         data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, year)
+    elif report_type == 'semester':
+        data = get_semester_attendance(branch, semester, section)
     
     return render_template_string(
         ADMIN_STUDENT_REPORTS_HTML,
@@ -1411,6 +1468,7 @@ def admin_student_reports():
         end_date=end_date
     )
 
+# FIXED: Updated admin teacher reports route
 @app.route('/admin/teacher-reports')
 @login_required
 @admin_required
@@ -1464,7 +1522,6 @@ def admin_export_attendance():
         
         for student_id, info in data.items():
             student = info['student']
-            periods_str = ', '.join([f"P{p['period']}({p['status']})" for p in info['periods']])
             percentage = (info['present_count'] / info['total_count'] * 100) if info['total_count'] > 0 else 0
             
             ws.append([
@@ -1498,6 +1555,25 @@ def admin_export_attendance():
                 item['theory_total'],
                 item['practical_present'],
                 item['practical_total'],
+                f"{item['overall_percentage']:.2f}%"
+            ])
+    
+    elif report_type == 'semester':
+        data = get_semester_attendance(branch, semester, section)
+        
+        ws.title = f"Semester_{semester}"
+        ws.append(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Theory %', 'Practical %', 'Overall %'])
+        
+        for item in data:
+            student = item['student']
+            ws.append([
+                student.register_number,
+                student.name,
+                student.branch,
+                student.current_semester,
+                student.section,
+                f"{item['theory_percentage']:.2f}%",
+                f"{item['practical_percentage']:.2f}%",
                 f"{item['overall_percentage']:.2f}%"
             ])
     
@@ -3958,6 +4034,7 @@ ADMIN_MANAGE_SUBJECTS_HTML = """
 </html>
 """
 
+# FIXED: Updated admin student reports template with semester option
 ADMIN_STUDENT_REPORTS_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -4038,6 +4115,7 @@ ADMIN_STUDENT_REPORTS_HTML = """
                         <select name="report_type" onchange="this.form.submit()">
                             <option value="daily" {% if report_type == 'daily' %}selected{% endif %}>Daily</option>
                             <option value="monthly" {% if report_type == 'monthly' %}selected{% endif %}>Monthly</option>
+                            <option value="semester" {% if report_type == 'semester' %}selected{% endif %}>Semester</option>
                         </select>
                     </div>
                     <div>
@@ -4069,7 +4147,7 @@ ADMIN_STUDENT_REPORTS_HTML = """
                         <label>Date</label>
                         <input type="date" name="date" value="{{ date.strftime('%Y-%m-%d') }}">
                     </div>
-                    {% else %}
+                    {% elif report_type == 'monthly' %}
                     <div>
                         <label>Month</label>
                         <select name="month">
@@ -4129,7 +4207,7 @@ ADMIN_STUDENT_REPORTS_HTML = """
                     {% endfor %}
                 </tbody>
             </table>
-            {% else %}
+            {% elif report_type == 'monthly' %}
             <table>
                 <thead>
                     <tr>
@@ -4160,6 +4238,37 @@ ADMIN_STUDENT_REPORTS_HTML = """
                     {% endfor %}
                 </tbody>
             </table>
+            {% elif report_type == 'semester' %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Register No</th>
+                        <th>Name</th>
+                        <th>Branch</th>
+                        <th>Sem</th>
+                        <th>Sec</th>
+                        <th>Theory %</th>
+                        <th>Practical %</th>
+                        <th>Overall %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in data %}
+                    <tr>
+                        <td>{{ item['student'].register_number }}</td>
+                        <td>{{ item['student'].name }}</td>
+                        <td>{{ item['student'].branch }}</td>
+                        <td>{{ item['student'].current_semester }}</td>
+                        <td>{{ item['student'].section }}</td>
+                        <td>{{ "%.1f"|format(item['theory_percentage']) }}%</td>
+                        <td>{{ "%.1f"|format(item['practical_percentage']) }}%</td>
+                        <td class="{% if item['overall_percentage'] < 75 %}low-attendance{% endif %}">
+                            {{ "%.1f"|format(item['overall_percentage']) }}%
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
             {% endif %}
         </div>
         {% endif %}
@@ -4170,6 +4279,7 @@ ADMIN_STUDENT_REPORTS_HTML = """
 </html>
 """
 
+# FIXED: Updated admin teacher reports template (no JOIN issues, but cleaned up)
 ADMIN_TEACHER_REPORTS_HTML = """
 <!DOCTYPE html>
 <html lang="en">
