@@ -544,6 +544,7 @@ def get_monthly_attendance(branch, semester, section, month, year):
     return monthly_data, start_date, end_date
 
 # NEW: Semester-wise attendance for admin - FIXED: Sort by register_number
+# NEW: Semester-wise attendance for admin - FIXED: Sort by register_number and date range
 def get_semester_attendance(branch, semester, section):
     """Get semester-wise attendance report for admin - sorted by register_number"""
     # Build base query
@@ -563,10 +564,27 @@ def get_semester_attendance(branch, semester, section):
     semester_data = []
     
     for student in students:
-        # Get all attendance for this student's current semester
+        # FIXED: Calculate date range from registration to now/stopped date
+        start_date = student.semester_start_date
+        end_date = datetime.now().date()
+        
+        # Check if semester is stopped for this student's branch/semester
+        stopped = StoppedSemester.query.filter_by(
+            branch=student.branch,
+            semester=student.current_semester,
+            is_active=True
+        ).first()
+        
+        if stopped:
+            # Use the stopped date from the stop record
+            end_date = stopped.stopped_at.date()
+        
+        # FIXED: Filter attendance by date range AND semester number
         attendances = Attendance.query.filter(
             Attendance.student_id == student.id,
-            Attendance.semester_at_time == student.current_semester
+            Attendance.semester_at_time == student.current_semester,
+            Attendance.date >= start_date,      # From registration date
+            Attendance.date <= end_date         # To stop date or today
         ).all()
         
         theory_present = sum(1 for a in attendances if a.attendance_type == 'theory' and a.status == 'present')
