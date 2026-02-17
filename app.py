@@ -4417,7 +4417,6 @@ ADMIN_STUDENT_REPORTS_HTML = """
 </html>
 """
 
-# FIXED: Updated admin teacher reports template with Print and PDF buttons
 ADMIN_TEACHER_REPORTS_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -4479,13 +4478,64 @@ ADMIN_TEACHER_REPORTS_HTML = """
             border-bottom: 1px solid #e2e8f0;
         }
         th { background: #f7fafc; }
-        .btn-print { background: #4299e1; }
-        .btn-pdf { background: #ed8936; }
-        .action-btns {
+        
+        /* ACTION BUTTONS - FIXED TO MATCH EACH OTHER */
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
             margin-bottom: 1.5rem;
         }
+
+        .btn-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+            text-decoration: none;
+            line-height: 1.4;
+            height: 36px;
+        }
+
+        /* Print Button - Gray style */
+        .btn-print {
+            background: #f3f4f6;
+            color: #374151;
+            border-color: #d1d5db;
+        }
+
+        .btn-print:hover {
+            background: #e5e7eb;
+            border-color: #9ca3af;
+        }
+
+        /* Download PDF Button - NOW MATCHES PRINT BUTTON STYLE */
+        .btn-download {
+            background: #f3f4f6;
+            color: #dc2626;
+            border-color: #d1d5db;
+        }
+
+        .btn-download:hover {
+            background: #fee2e2;
+            border-color: #fca5a5;
+        }
+
+        /* Icons */
+        .btn-action svg {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+        }
+        
         @media print {
-            .navbar, .filters, form, .action-btns { display: none; }
+            .navbar, .filters, form, .action-buttons { display: none; }
             .card { box-shadow: none; }
         }
     </style>
@@ -4536,9 +4586,19 @@ ADMIN_TEACHER_REPORTS_HTML = """
         {% if data %}
         <div class="card">
             <h3>Teacher Attendance</h3>
-            <div class="action-btns">
-                <button class="btn btn-print" onclick="window.print()">🖨️ Print</button>
-                <a href="{{ url_for('download_pdf_admin_teacher', branch=selected_branch, name=name, month=month, year=year) }}" class="btn btn-pdf">📄 Download PDF</a>
+            <div class="action-buttons">
+                <button class="btn-action btn-print" onclick="window.print()">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
+                    </svg>
+                    Print
+                </button>
+                <a href="{{ url_for('download_pdf_admin_teacher', branch=selected_branch, name=name, month=month, year=year) }}" class="btn-action btn-download">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    Download PDF
+                </a>
             </div>
             <table>
                 <thead>
@@ -4574,6 +4634,7 @@ ADMIN_TEACHER_REPORTS_HTML = """
 </body>
 </html>
 """
+
 
 # ============================================
 # PDF GENERATION ROUTES
