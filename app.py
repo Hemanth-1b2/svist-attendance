@@ -444,9 +444,9 @@ def get_teacher_yearly_attendance(teacher, year=None):
         'monthly_breakdown': monthly_data
     }
 
-# FIXED: Removed multiple JOINs issue
+# FIXED: Removed multiple JOINs issue and ensured sorting by register_number
 def get_daily_attendance(branch, semester, section, date):
-    """Get daily attendance report"""
+    """Get daily attendance report - sorted by register_number"""
     # Start with base query joining Student once
     query = db.session.query(Attendance, Student).join(
         Student, Attendance.student_id == Student.id
@@ -459,6 +459,9 @@ def get_daily_attendance(branch, semester, section, date):
         query = query.filter(Student.current_semester == int(semester))
     if section != 'all':
         query = query.filter(Student.section == section)
+    
+    # FIXED: Sort by register_number
+    query = query.order_by(Student.register_number.asc())
     
     results = query.all()
     
@@ -483,18 +486,24 @@ def get_daily_attendance(branch, semester, section, date):
         if att.status == 'present':
             student_attendance[student_id]['present_count'] += 1
     
-    return student_attendance
+    # Return sorted by register_number
+    return dict(sorted(student_attendance.items(), 
+                      key=lambda x: x[1]['student'].register_number))
 
-# FIXED: Removed multiple JOINs issue
+# FIXED: Removed multiple JOINs issue and ensured sorting by register_number
 def get_monthly_attendance(branch, semester, section, month, year):
-    """Get monthly attendance report"""
-    start_date = datetime(year, int(month), 1).date()
-    if int(month) == 12:
+    """Get monthly attendance report - sorted by register_number"""
+    # FIXED: Convert month and year to integers properly
+    month = int(month)
+    year = int(year)
+    
+    start_date = datetime(year, month, 1).date()
+    if month == 12:
         end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
     else:
-        end_date = datetime(year, int(month) + 1, 1).date() - timedelta(days=1)
+        end_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
     
-    # Build base query
+    # Build base query - FIXED: Sort by register_number
     query = Student.query.filter_by(is_semester_active=True)
     
     if branch != 'all':
@@ -503,6 +512,9 @@ def get_monthly_attendance(branch, semester, section, month, year):
         query = query.filter_by(current_semester=int(semester))
     if section != 'all':
         query = query.filter_by(section=section)
+    
+    # FIXED: Sort by register_number
+    query = query.order_by(Student.register_number.asc())
     
     students = query.all()
     monthly_data = []
@@ -528,11 +540,12 @@ def get_monthly_attendance(branch, semester, section, month, year):
             'overall_percentage': ((theory_present + practical_present) / (theory_total + practical_total) * 100) if (theory_total + practical_total) > 0 else 0
         })
     
+    # Already sorted by register_number due to query order_by
     return monthly_data, start_date, end_date
 
-# NEW: Semester-wise attendance for admin
+# NEW: Semester-wise attendance for admin - FIXED: Sort by register_number
 def get_semester_attendance(branch, semester, section):
-    """Get semester-wise attendance report for admin"""
+    """Get semester-wise attendance report for admin - sorted by register_number"""
     # Build base query
     query = Student.query.filter_by(is_semester_active=True)
     
@@ -542,6 +555,9 @@ def get_semester_attendance(branch, semester, section):
         query = query.filter_by(current_semester=int(semester))
     if section != 'all':
         query = query.filter_by(section=section)
+    
+    # FIXED: Sort by register_number
+    query = query.order_by(Student.register_number.asc())
     
     students = query.all()
     semester_data = []
@@ -574,6 +590,7 @@ def get_semester_attendance(branch, semester, section):
             'overall_percentage': (total_present / total_classes * 100) if total_classes > 0 else 0
         })
     
+    # Already sorted by register_number due to query order_by
     return semester_data
 
 # FIXED: Removed multiple JOINs issue for teacher reports
@@ -591,11 +608,14 @@ def get_teacher_attendance_report(branch=None, name=None, month=None, year=None)
     
     for teacher in teachers:
         if month and year:
-            start_date = datetime(int(year), int(month), 1).date()
-            if int(month) == 12:
-                end_date = datetime(int(year) + 1, 1, 1).date() - timedelta(days=1)
+            # FIXED: Convert to integers
+            month = int(month)
+            year = int(year)
+            start_date = datetime(year, month, 1).date()
+            if month == 12:
+                end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
             else:
-                end_date = datetime(int(year), int(month) + 1, 1).date() - timedelta(days=1)
+                end_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
             
             attendances = TeacherAttendance.query.filter(
                 TeacherAttendance.teacher_id == teacher.id,
@@ -1419,7 +1439,7 @@ def admin_delete_subject(subject_id):
         flash('Failed to delete subject', 'danger')
     return redirect(url_for('admin_manage_subjects'))
 
-# FIXED: Updated admin student reports with semester option
+# FIXED: Updated admin student reports with semester option - SORTED BY REGISTER NUMBER
 @app.route('/admin/student-reports')
 @login_required
 @admin_required
@@ -1448,6 +1468,7 @@ def admin_student_reports():
     if report_type == 'daily':
         data = get_daily_attendance(branch, semester, section, report_date)
     elif report_type == 'monthly':
+        # FIXED: Ensure month and year are integers
         data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, year)
     elif report_type == 'semester':
         data = get_semester_attendance(branch, semester, section)
@@ -1498,34 +1519,35 @@ def admin_teacher_reports():
         data=data
     )
 
+# FIXED: Export attendance - removed openpyxl dependency issue
 @app.route('/admin/export-attendance')
 @login_required
 @admin_required
 def admin_export_attendance():
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment
-    
     report_type = request.args.get('report_type', 'daily')
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
     
-    wb = Workbook()
-    ws = wb.active
+    # Create CSV instead of Excel (no openpyxl dependency)
+    import csv
+    import io
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
     
     if report_type == 'daily':
         date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
         report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
         data = get_daily_attendance(branch, semester, section, report_date)
         
-        ws.title = f"Daily_{report_date}"
-        ws.append(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Periods Present', 'Total Periods', 'Percentage'])
+        writer.writerow(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Periods Present', 'Total Periods', 'Percentage'])
         
         for student_id, info in data.items():
             student = info['student']
             percentage = (info['present_count'] / info['total_count'] * 100) if info['total_count'] > 0 else 0
             
-            ws.append([
+            writer.writerow([
                 student.register_number,
                 student.name,
                 student.branch,
@@ -1541,12 +1563,11 @@ def admin_export_attendance():
         year = int(request.args.get('year', datetime.now().year))
         data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, year)
         
-        ws.title = f"Monthly_{month}_{year}"
-        ws.append(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Theory Present', 'Theory Total', 'Practical Present', 'Practical Total', 'Overall %'])
+        writer.writerow(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Theory Present', 'Theory Total', 'Practical Present', 'Practical Total', 'Overall %'])
         
         for item in data:
             student = item['student']
-            ws.append([
+            writer.writerow([
                 student.register_number,
                 student.name,
                 student.branch,
@@ -1562,12 +1583,11 @@ def admin_export_attendance():
     elif report_type == 'semester':
         data = get_semester_attendance(branch, semester, section)
         
-        ws.title = f"Semester_{semester}"
-        ws.append(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Theory %', 'Practical %', 'Overall %'])
+        writer.writerow(['Register Number', 'Name', 'Branch', 'Semester', 'Section', 'Theory %', 'Practical %', 'Overall %'])
         
         for item in data:
             student = item['student']
-            ws.append([
+            writer.writerow([
                 student.register_number,
                 student.name,
                 student.branch,
@@ -1578,34 +1598,13 @@ def admin_export_attendance():
                 f"{item['overall_percentage']:.2f}%"
             ])
     
-    # Style the header
-    for cell in ws[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-        cell.alignment = Alignment(horizontal="center")
-    
-    # Auto-adjust column widths
-    for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(str(cell.value))
-            except:
-                pass
-        adjusted_width = min(max_length + 2, 50)
-        ws.column_dimensions[column_letter].width = adjusted_width
-    
-    output = BytesIO()
-    wb.save(output)
     output.seek(0)
     
-    filename = f"attendance_{report_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"attendance_{report_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     
     return send_file(
-        output,
-        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        mimetype='text/csv',
         as_attachment=True,
         download_name=filename
     )
@@ -2392,7 +2391,7 @@ STUDENT_DAILY_REPORT_HTML = """
             text-align: left;
             border-bottom: 1px solid #e2e8f0;
         }
-        th { background: #f7fafc; font-weight: 600; }
+        th { background: #f7fafc; }
         .status-present { color: #38a169; font-weight: 600; }
         .status-absent { color: #e53e3e; font-weight: 600; }
         .back-link {
@@ -4160,6 +4159,7 @@ ADMIN_MANAGE_SUBJECTS_HTML = """
 """
 
 # FIXED: Updated admin student reports template with Print, PDF, and semester option
+# All reports now sorted by register_number
 ADMIN_STUDENT_REPORTS_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -4301,13 +4301,13 @@ ADMIN_STUDENT_REPORTS_HTML = """
                     {% endif %}
                 </div>
                 <button type="submit" class="btn">Generate Report</button>
-                <a href="{{ url_for('admin_export_attendance', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-success">Export Excel</a>
+                <a href="{{ url_for('admin_export_attendance', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-success">Export CSV</a>
             </form>
         </div>
         
         {% if data %}
         <div class="card">
-            <h3>Report Results</h3>
+            <h3>Report Results (Sorted by Register Number)</h3>
             <div class="action-btns">
                 <button class="btn btn-print" onclick="window.print()">🖨️ Print</button>
                 <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-pdf">📄 Download PDF</a>
