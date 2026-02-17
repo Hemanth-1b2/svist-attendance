@@ -826,31 +826,8 @@ def register_teacher():
             app.logger.error(f"Teacher registration error: {e}")
             flash('Registration failed. Please try again.', 'danger')
     
-    return render_template_string(REGISTER_TEACHER_HTML, form=form)
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    form = LoginForm()
-    if form.validate_on_submit():
-        user = User.query.filter_by(email=form.email.data).first()
-        
-        if user and check_password_hash(user.password_hash, form.password.data):
-            if user.role == form.role.data:
-                login_user(user)
-                flash(f'Welcome back!', 'success')
-                
-                if user.role == 'admin':
-                    return redirect(url_for('admin_dashboard'))
-                elif user.role == 'teacher':
-                    return redirect(url_for('teacher_dashboard'))
-                else:
-                    return redirect(url_for('student_dashboard'))
-            else:
-                flash('Invalid role selected.', 'danger')
-        else:
-            flash('Invalid email or password.', 'danger')
-    
-    return render_template_string(LOGIN_HTML, form=form)
+    # ✅ FIXED: Pass TEACHER_ROLES to template
+    return render_template_string(REGISTER_TEACHER_HTML, form=form, TEACHER_ROLES=TEACHER_ROLES)
 
 @app.route('/logout')
 @login_required
