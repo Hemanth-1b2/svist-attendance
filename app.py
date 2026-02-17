@@ -546,9 +546,8 @@ def get_monthly_attendance(branch, semester, section, month, year):
 # NEW: Semester-wise attendance for admin - FIXED: Sort by register_number
 # NEW: Semester-wise attendance for admin - FIXED: Sort by register_number and date range
 def get_semester_attendance(branch, semester, section):
-    """Get semester-wise attendance report for admin - sorted by register_number"""
-    # Build base query
-    query = Student.query.filter_by(is_semester_active=True)
+    """Get semester-wise attendance report for admin - each student has their own timeline"""
+    query = Student.query
     
     if branch != 'all':
         query = query.filter_by(branch=branch)
@@ -557,18 +556,19 @@ def get_semester_attendance(branch, semester, section):
     if section != 'all':
         query = query.filter_by(section=section)
     
-    # FIXED: Sort by register_number
     query = query.order_by(Student.register_number.asc())
-    
     students = query.all()
     semester_data = []
     
     for student in students:
-        # FIXED: Calculate date range from registration to now/stopped date
-        start_date = student.semester_start_date
+        # Each student has their OWN timeline: their registration date to their stop date
+        start_date = student.semester_start_date  # When they registered
+        
+        # Check if this specific student's semester is stopped
+        # (either by branch/semester stop or individual stop)
         end_date = datetime.now().date()
         
-        # Check if semester is stopped for this student's branch/semester
+        # Check if branch/semester is currently stopped
         stopped = StoppedSemester.query.filter_by(
             branch=student.branch,
             semester=student.current_semester,
@@ -576,14 +576,23 @@ def get_semester_attendance(branch, semester, section):
         ).first()
         
         if stopped:
-            # Use the stopped date from the stop record
+            # Semester is stopped - this student's attendance ends at stop date
             end_date = stopped.stopped_at.date()
+        elif not student.is_semester_active:
+            # Student's semester was stopped individually (archived)
+            history = SemesterHistory.query.filter_by(
+                student_id=student.id,
+                semester_number=student.current_semester
+            ).order_by(SemesterHistory.stopped_at.desc()).first()
+            
+            if history:
+                end_date = history.end_date
         
-        # FIXED: Filter attendance by date range AND semester number
+        # Calculate attendance for this student's specific date range
         attendances = Attendance.query.filter(
             Attendance.student_id == student.id,
             Attendance.semester_at_time == student.current_semester,
-            Attendance.date >= start_date,      # From registration date
+            Attendance.date >= start_date,      # From their registration
             Attendance.date <= end_date         # To stop date or today
         ).all()
         
@@ -605,10 +614,12 @@ def get_semester_attendance(branch, semester, section):
             'practical_percentage': (practical_present / practical_total * 100) if practical_total > 0 else 0,
             'total_present': total_present,
             'total_classes': total_classes,
-            'overall_percentage': (total_present / total_classes * 100) if total_classes > 0 else 0
+            'overall_percentage': (total_present / total_classes * 100) if total_classes > 0 else 0,
+            'start_date': start_date,  # Show individual start date
+            'end_date': end_date,      # Show individual end date
+            'is_active': student.is_semester_active
         })
     
-    # Already sorted by register_number due to query order_by
     return semester_data
 
 # FIXED: Removed multiple JOINs issue for teacher reports
@@ -716,6 +727,21 @@ def register_student():
             flash('Register number already exists.', 'danger')
             return redirect(url_for('register_student'))
         
+        # Check if this branch/semester is currently stopped
+        branch = form.branch.data
+        semester = int(form.semester.data)
+        
+        stopped = StoppedSemester.query.filter_by(
+            branch=branch,
+            semester=semester,
+            is_active=True
+        ).first()
+        
+        if stopped:
+            flash(f'Semester {semester} for {branch} is currently closed. Please contact administration.', 'danger')
+            return redirect(url_for('register_student'))
+        
+        # ✅ Semester is open (either never stopped or was reactivated) - allow registration
         try:
             user = User(
                 email=form.email.data,
@@ -729,12 +755,12 @@ def register_student():
                 user_id=user.id,
                 name=form.name.data,
                 register_number=form.register_number.data,
-                branch=form.branch.data,
-                current_semester=int(form.semester.data),
+                branch=branch,
+                current_semester=semester,
                 section=form.section.data,
                 phone=form.phone.data,
-                semester_start_date=datetime.now().date(),
-                is_semester_active=True
+                semester_start_date=datetime.now().date(),  # ✅ Their own start date
+                is_semester_active=True  # ✅ Active for this new student only
             )
             db.session.add(student)
             db.session.commit()
@@ -1382,28 +1408,21 @@ def admin_reactivate_semester(stop_id):
     stop_record = StoppedSemester.query.get_or_404(stop_id)
     
     try:
+        # Just mark the stop record as inactive - allows NEW registrations
         stop_record.is_active = False
         
-        # Reactivate students
-        students = Student.query.filter_by(
-            branch=stop_record.branch,
-            current_semester=stop_record.semester,
-            is_semester_active=False
-        ).all()
-        
-        for student in students:
-            student.is_semester_active = True
-            student.semester_start_date = datetime.now().date()
+        # ❌ REMOVED: Don't reactivate existing students
+        # Their semester is already complete (archived in SemesterHistory)
         
         # Log action
         log = AdminLog(
             admin_id=current_user.id,
-            action=f"Reactivated semester {stop_record.semester} for branch {stop_record.branch}"
+            action=f"Reactivated semester {stop_record.semester} for branch {stop_record.branch} - allowing new registrations only"
         )
         db.session.add(log)
         
         db.session.commit()
-        flash('Semester reactivated successfully', 'success')
+        flash(f'Semester {stop_record.semester} for {stop_record.branch} is now open for NEW registrations only. Existing students have completed their semester.', 'success')
     except Exception as e:
         db.session.rollback()
         app.logger.error(f"Reactivate semester error: {e}")
