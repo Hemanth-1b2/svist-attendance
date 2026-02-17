@@ -779,6 +779,33 @@ def get_teacher_roles(category):
     roles = TEACHER_ROLES.get(category, [])
     return jsonify(roles)
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(email=form.email.data).first()
+        
+        if user and check_password_hash(user.password_hash, form.password.data):
+            # Check if role matches
+            if user.role != form.role.data:
+                flash(f'Invalid role selected. You are registered as a {user.role}.', 'danger')
+                return redirect(url_for('login'))
+            
+            login_user(user)
+            flash('Login successful!', 'success')
+            
+            # Redirect based on role
+            if user.role == 'admin':
+                return redirect(url_for('admin_dashboard'))
+            elif user.role == 'teacher':
+                return redirect(url_for('teacher_dashboard'))
+            else:  # student
+                return redirect(url_for('student_dashboard'))
+        else:
+            flash('Invalid email or password.', 'danger')
+    
+    return render_template_string(LOGIN_HTML, form=form)
+
 @app.route('/register/teacher', methods=['GET', 'POST'])
 def register_teacher():
     form = TeacherRegistrationForm()
