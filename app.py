@@ -136,9 +136,8 @@ class Student(db.Model):
     __tablename__ = 'students'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
-    
     name = db.Column(db.String(100), nullable=False)
-    register_number = db.Column(db.String(20), nullable=False, index=True)  # Remove unique
+    register_number = db.Column(db.String(20), nullable=False, index=True)  # NO unique=True
     branch = db.Column(db.String(10), nullable=False, index=True)
     current_semester = db.Column(db.Integer, nullable=False, index=True)
     section = db.Column(db.String(5), nullable=False, index=True)
@@ -146,10 +145,7 @@ class Student(db.Model):
     semester_start_date = db.Column(db.Date, nullable=False)
     is_semester_active = db.Column(db.Boolean, default=True, index=True)
     
-    # Composite unique: One active record per register+semester
-    #__table_args__ = (
-    #   db.UniqueConstraint('register_number', 'current_semester', name='unique_reg_sem'),
-    #)
+    # NO __table_args__ with UniqueConstraint
     
     attendances = db.relationship('Attendance', backref='student', lazy='dynamic')
 
@@ -735,18 +731,20 @@ def register_student():
         user = User.query.filter_by(email=email).first()
         
         if user:
-            # Check if already has ACTIVE record for this exact semester
+            # Only block if ALREADY ACTIVE in this exact semester
             existing_active = Student.query.filter_by(
                 user_id=user.id,
+                register_number=register_number,
                 current_semester=semester,
                 is_semester_active=True
             ).first()
             
             if existing_active:
-                flash(f'You are already registered for Semester {semester}. Please login.', 'danger')
+                flash(f'You are already actively registered for Semester {semester}. Please login.', 'danger')
                 return redirect(url_for('login'))
             
-            # ARCHIVE all existing active semesters
+            # If INACTIVE record exists (stopped/archived), allow re-registration
+            # Archive any other active semesters first
             active_students = Student.query.filter_by(
                 user_id=user.id, 
                 is_semester_active=True
@@ -793,10 +791,10 @@ def register_student():
         ).first()
         
         if stopped:
-            flash(f'Semester {semester} for {branch} is closed.', 'danger')
+            flash(f'Semester {semester} for {branch} is currently closed.', 'danger')
             return redirect(url_for('register_student'))
         
-        # Create new ACTIVE student record
+        # Create new student record (even if same semester existed before but was inactive)
         try:
             new_student = Student(
                 user_id=user.id,
@@ -812,7 +810,7 @@ def register_student():
             db.session.add(new_student)
             db.session.commit()
             
-            flash(f'Registration successful for Semester {semester}! Previous semesters archived.', 'success')
+            flash(f'Registration successful for Semester {semester}!', 'success')
             return redirect(url_for('login'))
             
         except Exception as e:
