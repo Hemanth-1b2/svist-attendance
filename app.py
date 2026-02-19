@@ -97,14 +97,17 @@ def inject_utilities():
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False, index=True)  # Keep unique
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), nullable=False, index=True)
     
-    # Relationship: One user -> Many students (different semesters)
+    # ADD THIS LINE:
+    is_active = db.Column(db.Boolean, default=True)
+    
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
     students = db.relationship('Student', backref='user', lazy='dynamic')
     teacher = db.relationship('Teacher', backref='user', uselist=False, lazy='joined')
-
 class SemesterHistory(db.Model):
     __tablename__ = 'semester_history'
     id = db.Column(db.Integer, primary_key=True)
