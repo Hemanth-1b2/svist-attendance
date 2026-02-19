@@ -149,7 +149,7 @@ class Student(db.Model):
     # Composite unique: One active record per register+semester
     #__table_args__ = (
     #   db.UniqueConstraint('register_number', 'current_semester', name='unique_reg_sem'),
-    )
+    #)
     
     attendances = db.relationship('Attendance', backref='student', lazy='dynamic')
 
