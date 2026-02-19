@@ -735,10 +735,9 @@ def register_student():
         user = User.query.filter_by(email=email).first()
         
         if user:
-            # User exists - check if already has ACTIVE record for this semester
+            # Check if already has ACTIVE record for this exact semester
             existing_active = Student.query.filter_by(
                 user_id=user.id,
-                register_number=register_number,
                 current_semester=semester,
                 is_semester_active=True
             ).first()
@@ -747,31 +746,39 @@ def register_student():
                 flash(f'You are already registered for Semester {semester}. Please login.', 'danger')
                 return redirect(url_for('login'))
             
-            # Check if INACTIVE record exists (stopped/promoted/suspended)
-            existing_inactive = Student.query.filter_by(
-                user_id=user.id,
-                register_number=register_number,
-                current_semester=semester,
-                is_semester_active=False
-            ).first()
+            # ARCHIVE all existing active semesters
+            active_students = Student.query.filter_by(
+                user_id=user.id, 
+                is_semester_active=True
+            ).all()
             
-            if existing_inactive:
-                # Re-registering for same semester after stop/suspension
-                # Create NEW student record (don't reactivate old)
-                pass  # Continue to create new record below
+            for old_student in active_students:
+                # Archive to history
+                sem_data = get_comprehensive_attendance(old_student)
+                
+                history = SemesterHistory(
+                    student_id=old_student.id,
+                    semester_number=old_student.current_semester,
+                    section=old_student.section,
+                    start_date=old_student.semester_start_date,
+                    end_date=datetime.now().date(),
+                    total_theory_classes=sem_data['theory_total'],
+                    present_theory_classes=sem_data['theory_present'],
+                    total_lab_classes=sem_data['practical_total'],
+                    present_lab_classes=sem_data['practical_present'],
+                    attendance_percentage=sem_data['overall_percentage'],
+                    stopped_by_admin_id=None,
+                    stopped_at=datetime.utcnow()
+                )
+                db.session.add(history)
+                
+                # Deactivate old semester
+                old_student.is_semester_active = False
             
-            # Check semester progression (optional - can be removed)
-            highest_sem = db.session.query(db.func.max(Student.current_semester)).filter_by(
-                user_id=user.id, register_number=register_number
-            ).scalar() or 0
-            
-            # Allow any semester (same or next) - remove this check if you want complete freedom
-            # if semester < highest_sem:
-            #     flash(f'You can only register for Semester {highest_sem} or {highest_sem + 1}', 'danger')
-            #     return redirect(url_for('register_student'))
+            db.session.flush()
             
         else:
-            # New user - create account
+            # Create new user
             user = User(
                 email=email,
                 password_hash=generate_password_hash(form.password.data),
@@ -789,9 +796,9 @@ def register_student():
             flash(f'Semester {semester} for {branch} is closed.', 'danger')
             return redirect(url_for('register_student'))
         
-        # Create new student record (linked to same user)
+        # Create new ACTIVE student record
         try:
-            student = Student(
+            new_student = Student(
                 user_id=user.id,
                 name=form.name.data,
                 register_number=register_number,
@@ -802,10 +809,10 @@ def register_student():
                 semester_start_date=datetime.now().date(),
                 is_semester_active=True
             )
-            db.session.add(student)
+            db.session.add(new_student)
             db.session.commit()
             
-            flash(f'Registration successful for Semester {semester}! Please login.', 'success')
+            flash(f'Registration successful for Semester {semester}! Previous semesters archived.', 'success')
             return redirect(url_for('login'))
             
         except Exception as e:
