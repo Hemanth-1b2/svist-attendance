@@ -94,16 +94,15 @@ def inject_utilities():
 # DATABASE MODELS
 # ============================================
 
-class User(UserMixin, db.Model):
+class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    email = db.Column(db.String(120), unique=True, nullable=False, index=True)  # Keep unique
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), nullable=False, index=True)
-    is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    student = db.relationship('Student', backref='user', uselist=False, lazy='joined')
+    # Relationship: One user -> Many students (different semesters)
+    students = db.relationship('Student', backref='user', lazy='dynamic')
     teacher = db.relationship('Teacher', backref='user', uselist=False, lazy='joined')
 
 class SemesterHistory(db.Model):
@@ -136,15 +135,21 @@ class StoppedSemester(db.Model):
 class Student(db.Model):
     __tablename__ = 'students'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), index=True)
+    
     name = db.Column(db.String(100), nullable=False)
-    register_number = db.Column(db.String(20), unique=True, nullable=False, index=True)
+    register_number = db.Column(db.String(20), nullable=False, index=True)  # Remove unique
     branch = db.Column(db.String(10), nullable=False, index=True)
     current_semester = db.Column(db.Integer, nullable=False, index=True)
     section = db.Column(db.String(5), nullable=False, index=True)
     phone = db.Column(db.String(15))
     semester_start_date = db.Column(db.Date, nullable=False)
     is_semester_active = db.Column(db.Boolean, default=True, index=True)
+    
+    # Composite unique: One active record per register+semester
+    __table_args__ = (
+        db.UniqueConstraint('register_number', 'current_semester', name='unique_reg_sem'),
+    )
     
     attendances = db.relationship('Attendance', backref='student', lazy='dynamic')
 
@@ -720,57 +725,92 @@ def index():
 def register_student():
     form = StudentRegistrationForm()
     if form.validate_on_submit():
-        if User.query.filter_by(email=form.email.data).first():
-            flash('Email already registered.', 'danger')
-            return redirect(url_for('register_student'))
-        
-        if Student.query.filter_by(register_number=form.register_number.data).first():
-            flash('Register number already exists.', 'danger')
-            return redirect(url_for('register_student'))
-        
-        # Check if this branch/semester is currently stopped
+        email = form.email.data
+        register_number = form.register_number.data
         branch = form.branch.data
         semester = int(form.semester.data)
+        section = form.section.data
         
-        stopped = StoppedSemester.query.filter_by(
-            branch=branch,
-            semester=semester,
-            is_active=True
-        ).first()
+        # Check if user exists
+        user = User.query.filter_by(email=email).first()
         
-        if stopped:
-            flash(f'Semester {semester} for {branch} is currently closed. Please contact administration.', 'danger')
-            return redirect(url_for('register_student'))
-        
-        # ✅ Semester is open (either never stopped or was reactivated) - allow registration
-        try:
+        if user:
+            # User exists - check if already has ACTIVE record for this semester
+            existing_active = Student.query.filter_by(
+                user_id=user.id,
+                register_number=register_number,
+                current_semester=semester,
+                is_semester_active=True
+            ).first()
+            
+            if existing_active:
+                flash(f'You are already registered for Semester {semester}. Please login.', 'danger')
+                return redirect(url_for('login'))
+            
+            # Check if INACTIVE record exists (stopped/promoted/suspended)
+            existing_inactive = Student.query.filter_by(
+                user_id=user.id,
+                register_number=register_number,
+                current_semester=semester,
+                is_semester_active=False
+            ).first()
+            
+            if existing_inactive:
+                # Re-registering for same semester after stop/suspension
+                # Create NEW student record (don't reactivate old)
+                pass  # Continue to create new record below
+            
+            # Check semester progression (optional - can be removed)
+            highest_sem = db.session.query(db.func.max(Student.current_semester)).filter_by(
+                user_id=user.id, register_number=register_number
+            ).scalar() or 0
+            
+            # Allow any semester (same or next) - remove this check if you want complete freedom
+            # if semester < highest_sem:
+            #     flash(f'You can only register for Semester {highest_sem} or {highest_sem + 1}', 'danger')
+            #     return redirect(url_for('register_student'))
+            
+        else:
+            # New user - create account
             user = User(
-                email=form.email.data,
+                email=email,
                 password_hash=generate_password_hash(form.password.data),
                 role='student'
             )
             db.session.add(user)
             db.session.flush()
-            
+        
+        # Check if semester is stopped
+        stopped = StoppedSemester.query.filter_by(
+            branch=branch, semester=semester, is_active=True
+        ).first()
+        
+        if stopped:
+            flash(f'Semester {semester} for {branch} is closed.', 'danger')
+            return redirect(url_for('register_student'))
+        
+        # Create new student record (linked to same user)
+        try:
             student = Student(
                 user_id=user.id,
                 name=form.name.data,
-                register_number=form.register_number.data,
+                register_number=register_number,
                 branch=branch,
                 current_semester=semester,
-                section=form.section.data,
+                section=section,
                 phone=form.phone.data,
-                semester_start_date=datetime.now().date(),  # ✅ Their own start date
-                is_semester_active=True  # ✅ Active for this new student only
+                semester_start_date=datetime.now().date(),
+                is_semester_active=True
             )
             db.session.add(student)
             db.session.commit()
             
-            flash('Registration successful! Please login.', 'success')
+            flash(f'Registration successful for Semester {semester}! Please login.', 'success')
             return redirect(url_for('login'))
+            
         except Exception as e:
             db.session.rollback()
-            app.logger.error(f"Student registration error: {e}")
+            app.logger.error(f"Registration error: {e}")
             flash('Registration failed. Please try again.', 'danger')
     
     return render_template_string(REGISTER_STUDENT_HTML, form=form)
@@ -787,25 +827,72 @@ def login():
         user = User.query.filter_by(email=form.email.data).first()
         
         if user and check_password_hash(user.password_hash, form.password.data):
-            # Check if role matches
             if user.role != form.role.data:
-                flash(f'Invalid role selected. You are registered as a {user.role}.', 'danger')
+                flash(f'Invalid role. You are registered as {user.role}.', 'danger')
                 return redirect(url_for('login'))
+            
+            # For students, check active semesters
+            if user.role == 'student':
+                active_students = Student.query.filter_by(
+                    user_id=user.id, is_semester_active=True
+                ).all()
+                
+                if len(active_students) == 0:
+                    flash('No active semester found. Please register.', 'danger')
+                    return redirect(url_for('register_student'))
+                
+                elif len(active_students) == 1:
+                    # Single active semester - auto select
+                    session['current_student_id'] = active_students[0].id
+                
+                else:
+                    # Multiple active semesters - let user choose
+                    session['user_id'] = user.id
+                    login_user(user)
+                    return redirect(url_for('select_active_semester'))
             
             login_user(user)
             flash('Login successful!', 'success')
             
-            # Redirect based on role
             if user.role == 'admin':
                 return redirect(url_for('admin_dashboard'))
             elif user.role == 'teacher':
                 return redirect(url_for('teacher_dashboard'))
-            else:  # student
+            else:
                 return redirect(url_for('student_dashboard'))
         else:
             flash('Invalid email or password.', 'danger')
     
     return render_template_string(LOGIN_HTML, form=form)
+
+@app.route('/select-semester')
+@login_required
+def select_active_semester():
+    """Select which active semester to view"""
+    if current_user.role != 'student':
+        return redirect(url_for('index'))
+    
+    active_students = Student.query.filter_by(
+        user_id=current_user.id, is_semester_active=True
+    ).all()
+    
+    if len(active_students) == 1:
+        session['current_student_id'] = active_students[0].id
+        return redirect(url_for('student_dashboard'))
+    
+    return render_template_string(SELECT_SEMESTER_HTML, students=active_students)
+
+@app.route('/set-semester/<int:student_id>')
+@login_required
+def set_active_semester(student_id):
+    """Set active semester for session"""
+    student = Student.query.get_or_404(student_id)
+    if student.user_id != current_user.id:
+        flash('Unauthorized', 'danger')
+        return redirect(url_for('index'))
+    
+    session['current_student_id'] = student_id
+    return redirect(url_for('student_dashboard'))
 
 @app.route('/change-password', methods=['GET', 'POST'])
 @login_required
@@ -910,22 +997,51 @@ def student_dashboard():
     if current_user.role != 'student':
         return redirect(url_for('login'))
     
-    student = current_user.student
-    today = datetime.now().date()
+    # Get specific student record from session
+    student_id = session.get('current_student_id')
     
+    if not student_id:
+        # Default to most recent active semester
+        student = Student.query.filter_by(
+            user_id=current_user.id, is_semester_active=True
+        ).order_by(Student.current_semester.desc()).first()
+        
+        if student:
+            session['current_student_id'] = student.id
+    else:
+        student = Student.query.get(student_id)
+    
+    if not student:
+        flash('No active semester found. Please register.', 'danger')
+        return redirect(url_for('register_student'))
+    
+    # Check if student's semester is stopped
+    today = datetime.now().date()
     semester_stopped = is_semester_stopped(student.branch, student.current_semester)
+    
     if semester_stopped and student.is_semester_active:
         student.is_semester_active = False
         db.session.commit()
         flash('Your semester attendance has been closed by administration.', 'info')
+        return redirect(url_for('select_active_semester'))
     
+    # Get attendance data for THIS semester only
     sem_data = get_comprehensive_attendance(student)
+    
     today_attendance = Attendance.query.filter_by(
         student_id=student.id, date=today
     ).order_by(Attendance.period).all()
     
+    # Get ALL past semesters (including inactive ones for this user)
     past_semesters = SemesterHistory.query.filter_by(student_id=student.id).order_by(
         SemesterHistory.semester_number
+    ).all()
+    
+    # Also show other active semesters for switching
+    other_semesters = Student.query.filter(
+        Student.user_id == current_user.id,
+        Student.is_semester_active == True,
+        Student.id != student.id
     ).all()
     
     return render_template_string(
@@ -934,8 +1050,9 @@ def student_dashboard():
         today_attendance=today_attendance,
         sem_data=sem_data,
         past_semesters=past_semesters,
+        other_semesters=other_semesters,  # For semester switching
         today=today,
-        semester_stopped=semester_stopped or not student.is_semester_active
+        semester_stopped=semester_stopped
     )
 
 # Student Daily Report - Only their own attendance
@@ -2413,6 +2530,18 @@ STUDENT_DASHBOARD_HTML = """
             </table>
         </div>
         {% endif %}
+
+        {% if other_semesters %}
+        <div class="card">
+            <h3>Your Other Active Semesters</h3>
+            {% for sem in other_semesters %}
+            <a href="{{ url_for('set_active_semester', student_id=sem.id) }}" class="btn">
+                Switch to Semester {{ sem.current_semester }} ({{ sem.branch }})
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+        
         
         <div class="card">
             <h3>Quick Links</h3>
