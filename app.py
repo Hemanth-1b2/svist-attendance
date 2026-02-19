@@ -807,6 +807,42 @@ def login():
     
     return render_template_string(LOGIN_HTML, form=form)
 
+@app.route('/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    if request.method == 'POST':
+        current_password = request.form.get('current_password')
+        new_password = request.form.get('new_password')
+        confirm_password = request.form.get('confirm_password')
+        
+        # Verify current password
+        if not check_password_hash(current_user.password_hash, current_password):
+            flash('Current password is incorrect.', 'danger')
+            return redirect(url_for('change_password'))
+        
+        # Check new password length
+        if len(new_password) < 6:
+            flash('New password must be at least 6 characters.', 'danger')
+            return redirect(url_for('change_password'))
+        
+        # Check passwords match
+        if new_password != confirm_password:
+            flash('New passwords do not match.', 'danger')
+            return redirect(url_for('change_password'))
+        
+        # Update password
+        try:
+            current_user.password_hash = generate_password_hash(new_password)
+            db.session.commit()
+            flash('Password changed successfully! Please login again.', 'success')
+            logout_user()
+            return redirect(url_for('login'))
+        except Exception as e:
+            db.session.rollback()
+            flash('Failed to change password.', 'danger')
+    
+    return render_template_string(CHANGE_PASSWORD_HTML)
+
 @app.route('/register/teacher', methods=['GET', 'POST'])
 def register_teacher():
     form = TeacherRegistrationForm()
@@ -2257,6 +2293,7 @@ STUDENT_DASHBOARD_HTML = """
             <a href="{{ url_for('student_daily_report') }}">Daily Report</a>
             <a href="{{ url_for('student_monthly_report') }}">Monthly Report</a>
             <a href="{{ url_for('student_semester_report') }}">Semester Report</a>
+            <a href="{{ url_for('change_password') }}">Change Password</a>
             <a href="{{ url_for('logout') }}">Logout</a>
         </div>
     </nav>
@@ -2958,6 +2995,7 @@ TEACHER_DASHBOARD_HTML = """
             <a href="{{ url_for('teacher_attendance_interface') }}">Mark Student Attendance</a>
             <a href="{{ url_for('teacher_daily_report') }}">Daily Report</a>
             <a href="{{ url_for('teacher_monthly_report') }}">Monthly Report</a>
+            <a href="{{ url_for('change_password') }}">Change Password</a>
             <a href="{{ url_for('logout') }}">Logout</a>
         </div>
     </nav>
@@ -3817,6 +3855,7 @@ ADMIN_DASHBOARD_HTML = """
             <a href="{{ url_for('admin_manage_subjects') }}">Subjects</a>
             <a href="{{ url_for('admin_student_reports') }}">Student Reports</a>
             <a href="{{ url_for('admin_teacher_reports') }}">Teacher Reports</a>
+            <a href="{{ url_for('change_password') }}">Change Password</a>
             <a href="{{ url_for('logout') }}">Logout</a>
         </div>
     </nav>
@@ -4672,6 +4711,101 @@ ADMIN_TEACHER_REPORTS_HTML = """
         {% endif %}
         
         <a href="{{ url_for('admin_dashboard') }}" style="color:#667eea;text-decoration:none;">← Back to Dashboard</a>
+    </div>
+</body>
+</html>
+"""
+
+CHANGE_PASSWORD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Change Password - SVIST</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .container {
+            background: white;
+            padding: 2.5rem;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 90%;
+            max-width: 450px;
+        }
+        h2 { color: #333; margin-bottom: 1.5rem; text-align: center; }
+        .form-group { margin-bottom: 1.5rem; }
+        label { display: block; margin-bottom: 0.5rem; color: #555; font-weight: 500; }
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        .btn {
+            width: 100%;
+            padding: 1rem;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            cursor: pointer;
+        }
+        .btn:hover { background: #5568d3; }
+        .alert {
+            padding: 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+        }
+        .alert-danger { background: #fed7d7; color: #c53030; }
+        .alert-success { background: #c6f6d5; color: #22543d; }
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 1rem;
+            color: #667eea;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔐 Change Password</h2>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label>Current Password</label>
+                <input type="password" name="current_password" placeholder="Enter current password" required>
+            </div>
+            <div class="form-group">
+                <label>New Password</label>
+                <input type="password" name="new_password" placeholder="Min 6 characters" required>
+            </div>
+            <div class="form-group">
+                <label>Confirm New Password</label>
+                <input type="password" name="confirm_password" placeholder="Re-enter new password" required>
+            </div>
+            <button type="submit" class="btn">Change Password</button>
+        </form>
+        <a href="{{ url_for('index') }}" class="back-link">← Back to Home</a>
     </div>
 </body>
 </html>
