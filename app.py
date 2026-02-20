@@ -2128,6 +2128,8 @@ LOGIN_HTML = """
                 {% for category, message in messages %}
                     <div class="alert alert-{{ category }}">{{ message }}</div>
                 {% endfor %}
+                <!-- Clear messages after displaying -->
+                {% set _ = session.pop('_flashes', None) %}
             {% endif %}
         {% endwith %}
         <form method="POST">
