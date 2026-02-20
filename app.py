@@ -1482,16 +1482,39 @@ def teacher_yearly_report():
 
 @app.route('/admin/dashboard')
 @login_required
-@admin_required
 def admin_dashboard():
-    total_students = Student.query.count()
-    total_teachers = Teacher.query.count()
+    # Allow admin, principal, and branch_admin
+    if current_user.role not in ['admin', 'principal', 'branch_admin']:
+        return "Access denied", 403
+    
+    if current_user.role == 'principal':
+        # Principal sees all
+        students = Student.query.filter_by(is_semester_active=True).all()
+        teachers = Teacher.query.all()
+        selected_branch = "ALL BRANCHES"
+        
+    elif current_user.role == 'branch_admin':
+        # Branch admin sees only their branch
+        selected_branch = session.get('selected_branch', 'UNKNOWN')
+        if selected_branch == 'UNKNOWN':
+            return "No branch selected", 403
+            
+        students = Student.query.filter_by(
+            branch=selected_branch,
+            is_semester_active=True
+        ).all()
+        teachers = Teacher.query.filter_by(branch=selected_branch).all()
+        
+    else:  # regular admin
+        students = Student.query.filter_by(is_semester_active=True).all()
+        teachers = Teacher.query.all()
+        selected_branch = "ALL BRANCHES"
+    
+    # Rest of your existing code...
+    total_students = len(students)
+    total_teachers = len(teachers)
     active_semesters = Student.query.filter_by(is_semester_active=True).count()
-    stopped_semesters = StoppedSemester.query.filter_by(is_active=True).count()
-    
-    today = datetime.now().date()
-    today_teacher_attendance = TeacherAttendance.query.filter_by(date=today).count()
-    
+    today_teacher_attendance = TeacherAttendance.query.filter_by(date=datetime.now().date()).count()
     recent_logs = AdminLog.query.order_by(AdminLog.timestamp.desc()).limit(10).all()
     
     return render_template_string(
@@ -1499,10 +1522,11 @@ def admin_dashboard():
         total_students=total_students,
         total_teachers=total_teachers,
         active_semesters=active_semesters,
-        stopped_semesters=stopped_semesters,
         today_teacher_attendance=today_teacher_attendance,
         recent_logs=recent_logs,
-        today=today
+        today=datetime.now().date(),
+        selected_branch=selected_branch,
+        user=current_user
     )
 
 @app.route('/admin/stop-semester', methods=['GET', 'POST'])
@@ -1873,6 +1897,73 @@ def admin_create_admin():
         flash('Failed to create admin account', 'danger')
     
     return redirect(url_for('admin_dashboard'))
+
+# ============================================
+# BRANCH ADMIN & PRINCIPAL LOGIN ROUTES
+# ============================================
+
+@app.route('/admin/login/<branch>', methods=['GET', 'POST'])
+def branch_admin_login(branch):
+    valid_branches = ['cse', 'ece', 'eee', 'civil', 'mech', 'ds', 'aiml']
+    
+    if branch.lower() not in valid_branches:
+        return "Invalid branch", 404
+    
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        user = User.query.filter_by(email=email).first()
+        
+        if user and check_password_hash(user.password_hash, password):
+            session['selected_branch'] = branch.upper()
+            login_user(user)
+            return redirect(url_for('admin_dashboard'))
+        
+        return "Invalid credentials", 401
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <body style="font-family:Arial;max-width:400px;margin:50px auto;">
+        <h2>{branch.upper()} Branch Admin Login</h2>
+        <form method="POST">
+            <input type="email" name="email" value="branchadmin@svist.com" required style="width:100%;padding:10px;margin:10px 0;">
+            <input type="password" name="password" placeholder="Password" required style="width:100%;padding:10px;margin:10px 0;">
+            <button type="submit" style="width:100%;padding:10px;background:#667eea;color:white;border:none;">Login</button>
+        </form>
+    </body>
+    </html>
+    '''
+
+@app.route('/principal/login', methods=['GET', 'POST'])
+def principal_login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        user = User.query.filter_by(email=email).first()
+        
+        if user and check_password_hash(user.password_hash, password) and user.role == 'principal':
+            session['selected_branch'] = 'ALL'
+            login_user(user)
+            return redirect(url_for('admin_dashboard'))
+        
+        return "Invalid credentials", 401
+    
+    return '''
+    <!DOCTYPE html>
+    <html>
+    <body style="font-family:Arial;max-width:400px;margin:50px auto;">
+        <h2>Principal Login</h2>
+        <form method="POST">
+            <input type="email" name="email" value="principal@svist.com" required style="width:100%;padding:10px;margin:10px 0;">
+            <input type="password" name="password" placeholder="Password" required style="width:100%;padding:10px;margin:10px 0;">
+            <button type="submit" style="width:100%;padding:10px;background:#d4af37;color:white;border:none;">Login</button>
+        </form>
+    </body>
+    </html>
+    '''
 
 # ============================================
 # HTML TEMPLATES (Inline for Railway.app deployment)
