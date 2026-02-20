@@ -102,6 +102,9 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), nullable=False, index=True)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Add this relationship
+    student = db.relationship('Student', backref='user', uselist=False)
     
     # ADD THIS METHOD:
     def get_id(self):
