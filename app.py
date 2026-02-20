@@ -104,7 +104,7 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Add this relationship
-    student = db.relationship('Student', backref='user', uselist=False)
+    #student = db.relationship('Student', backref='user', uselist=False)
     
     # ADD THIS METHOD:
     def get_id(self):
@@ -1076,7 +1076,13 @@ def student_daily_report():
     if current_user.role != 'student':
         return redirect(url_for('login'))
     
-    student = current_user.student
+    # Get the active semester student
+    student = current_user.students.filter_by(is_semester_active=True).first()
+
+    # If no active student, show error or redirect
+    if not student:
+        return "No active semester found. Please register for a semester."
+
     date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
     try:
         report_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -1100,7 +1106,13 @@ def student_monthly_report():
     if current_user.role != 'student':
         return redirect(url_for('login'))
     
-    student = current_user.student
+    # Get the active semester student
+    student = current_user.students.filter_by(is_semester_active=True).first()
+
+    # If no active student, show error or redirect
+    if not student:
+        return "No active semester found. Please register for a semester."
+
     month = int(request.args.get('month', datetime.now().month))
     year = int(request.args.get('year', datetime.now().year))
     
@@ -1137,7 +1149,13 @@ def student_semester_report():
     if current_user.role != 'student':
         return redirect(url_for('login'))
     
-    student = current_user.student
+    # Get the active semester student
+    student = current_user.students.filter_by(is_semester_active=True).first()
+
+    # If no active student, show error or redirect
+    if not student:
+        return "No active semester found. Please register for a semester."
+
     sem_data = get_comprehensive_attendance(student)
     
     return render_template_string(STUDENT_SEMESTER_REPORT_HTML, student=student, sem_data=sem_data)
