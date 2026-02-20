@@ -301,6 +301,26 @@ class SubjectForm(FlaskForm):
 # UTILITIES
 # ============================================
 
+def get_user_branch():
+    """Get branch from current user's email"""
+    email_prefix = current_user.email.split('@')[0]
+    branch_mapping = {
+        'cse.hod': 'CSE',
+        'ece.coordinator': 'ECE', 
+        'eee.incharge': 'EEE',
+        'civil.head': 'CIVIL',
+        'mech.admin': 'MECH',
+        'ds.dept': 'DS',
+        'aiml.director': 'AIML',
+        'principal.office': 'ALL',
+        'admin': 'ALL'
+    }
+    return branch_mapping.get(email_prefix, 'ALL')
+
+def is_principal_or_admin():
+    """Check if user is principal or main admin"""
+    return get_user_branch() == 'ALL'
+
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -1489,37 +1509,24 @@ def teacher_yearly_report():
 @login_required
 @admin_required
 def admin_dashboard():
-    # Extract branch from email (cseadmin@svist.com → CSE)
-    email_prefix = current_user.email.split('@')[0]  # "cseadmin"
+    user_branch = get_user_branch()
     
-    # Determine branch from email
-    branch_mapping = {
-        'cse.hod': 'CSE',
-        'ece.coordinator': 'ECE', 
-        'eee.incharge': 'EEE',
-        'civil.head': 'CIVIL',
-        'mech.admin': 'MECH',
-        'ds.dept': 'DS',
-        'aiml.director': 'AIML',
-        'principal.office': 'ALL',
-        'admin': 'ALL'
-    }    
-    selected_branch = branch_mapping.get(email_prefix, 'ALL')
-    
-    # Filter data based on branch
-    if selected_branch == 'ALL':
+    if user_branch == 'ALL':
+        # Principal/Admin sees all
         students = Student.query.filter_by(is_semester_active=True).all()
         teachers = Teacher.query.all()
-        #selected_branch = "ALL BRANCHES"
+        selected_branch = "ALL BRANCHES"
+        can_manage_all = True
     else:
-        students = Student.query.filter_by(branch=selected_branch, is_semester_active=True).all()
-        teachers = Teacher.query.filter_by(branch=selected_branch).all()
-        #selected_branch = user_branch
+        # Branch admin sees only their branch
+        students = Student.query.filter_by(branch=user_branch, is_semester_active=True).all()
+        teachers = Teacher.query.filter_by(branch=user_branch).all()
+        selected_branch = user_branch
+        can_manage_all = False
     
     total_students = len(students)
     total_teachers = len(teachers)
     active_semesters = Student.query.filter_by(is_semester_active=True).count()
-    stopped_semesters = StoppedSemester.query.filter_by(is_active=True).count()
     today_teacher_attendance = TeacherAttendance.query.filter_by(date=datetime.now().date()).count()
     recent_logs = AdminLog.query.order_by(AdminLog.timestamp.desc()).limit(10).all()
     
@@ -1528,24 +1535,34 @@ def admin_dashboard():
         total_students=total_students,
         total_teachers=total_teachers,
         active_semesters=active_semesters,
-        stopped_semesters=stopped_semesters,
         today_teacher_attendance=today_teacher_attendance,
         recent_logs=recent_logs,
         today=datetime.now().date(),
         selected_branch=selected_branch,
+        can_manage_all=can_manage_all,
         user=current_user
     )
-
 
 @app.route('/admin/stop-semester', methods=['GET', 'POST'])
 @login_required
 @admin_required
 def admin_stop_semester():
+    user_branch = get_user_branch()
+    
     form = StopSemesterForm()
+    
+    # If branch admin, force their branch and disable branch selection
+    if user_branch != 'ALL':
+        form.branch.choices = [(user_branch, user_branch)]
     
     if form.validate_on_submit():
         branch = form.branch.data
         semester = int(form.semester.data)
+        
+        # Security check: branch admin can only stop their own branch
+        if user_branch != 'ALL' and branch != user_branch:
+            flash('You can only stop semesters for your own branch.', 'danger')
+            return redirect(url_for('admin_stop_semester'))
         
         # Check if already stopped
         existing = StoppedSemester.query.filter_by(
@@ -1612,15 +1629,21 @@ def admin_stop_semester():
             app.logger.error(f"Stop semester error: {e}")
             flash('Failed to stop semester', 'danger')
     
-    # Get list of stopped semesters
-    stopped_list = StoppedSemester.query.filter_by(is_active=True).order_by(
-        StoppedSemester.stopped_at.desc()
-    ).all()
+    # Get list of stopped semesters (filtered by branch for branch admins)
+    if user_branch == 'ALL':
+        stopped_list = StoppedSemester.query.filter_by(is_active=True).order_by(
+            StoppedSemester.stopped_at.desc()
+        ).all()
+    else:
+        stopped_list = StoppedSemester.query.filter_by(
+            branch=user_branch, is_active=True
+        ).order_by(StoppedSemester.stopped_at.desc()).all()
     
     return render_template_string(
         ADMIN_STOP_SEMESTER_HTML,
         form=form,
-        stopped_list=stopped_list
+        stopped_list=stopped_list,
+        user_branch=user_branch
     )
 
 @app.route('/admin/reactivate-semester/<int:stop_id>', methods=['POST'])
@@ -1656,9 +1679,20 @@ def admin_reactivate_semester(stop_id):
 @login_required
 @admin_required
 def admin_manage_subjects():
+    user_branch = get_user_branch()
+    
     form = SubjectForm()
     
+    # If branch admin, force their branch
+    if user_branch != 'ALL':
+        form.branch.choices = [(user_branch, user_branch)]
+    
     if form.validate_on_submit():
+        # Security check
+        if user_branch != 'ALL' and form.branch.data != user_branch:
+            flash('You can only manage subjects for your own branch.', 'danger')
+            return redirect(url_for('admin_manage_subjects'))
+        
         try:
             subject = Subject(
                 code=form.code.data,
@@ -1676,11 +1710,19 @@ def admin_manage_subjects():
             app.logger.error(f"Add subject error: {e}")
             flash('Failed to add subject', 'danger')
     
-    subjects = Subject.query.order_by(Subject.branch, Subject.semester, Subject.code).all()
+    # Filter subjects by branch
+    if user_branch == 'ALL':
+        subjects = Subject.query.order_by(Subject.branch, Subject.semester, Subject.code).all()
+    else:
+        subjects = Subject.query.filter_by(branch=user_branch).order_by(
+            Subject.semester, Subject.code
+        ).all()
+    
     return render_template_string(
         ADMIN_MANAGE_SUBJECTS_HTML,
         form=form,
-        subjects=subjects
+        subjects=subjects,
+        user_branch=user_branch
     )
 
 @app.route('/admin/delete-subject/<int:subject_id>', methods=['POST'])
@@ -1703,6 +1745,13 @@ def admin_delete_subject(subject_id):
 @login_required
 @admin_required
 def admin_student_reports():
+    user_branch = get_user_branch()
+    
+    # Force branch filter for branch admins
+    if user_branch != 'ALL':
+        request.args = request.args.to_dict()
+        request.args['branch'] = user_branch.lower()
+    
     branches = ['all'] + [b[0] for b in BRANCHES]
     semesters = ['all'] + list(range(1, 9))
     sections = ['all', 'A', 'B', 'C']
@@ -1711,6 +1760,13 @@ def admin_student_reports():
     branch = request.args.get('branch', 'all')
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
+    
+    # Security check for branch admin
+    if user_branch != 'ALL' and branch != 'all' and branch.upper() != user_branch:
+        flash('You can only view reports for your own branch.', 'danger')
+        return redirect(url_for('admin_student_reports'))
+    
+    # Rest of your existing code...
     date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
     month = request.args.get('month', datetime.now().month)
     year = request.args.get('year', datetime.now().year)
@@ -1727,7 +1783,6 @@ def admin_student_reports():
     if report_type == 'daily':
         data = get_daily_attendance(branch, semester, section, report_date)
     elif report_type == 'monthly':
-        # FIXED: Ensure month and year are integers
         data, start_date, end_date = get_monthly_attendance(branch, semester, section, month, year)
     elif report_type == 'semester':
         data = get_semester_attendance(branch, semester, section)
@@ -1746,20 +1801,32 @@ def admin_student_reports():
         year=year,
         data=data,
         start_date=start_date,
-        end_date=end_date
+        end_date=end_date,
+        user_branch=user_branch
     )
 
-# FIXED: Updated admin teacher reports route
 @app.route('/admin/teacher-reports')
 @login_required
 @admin_required
 def admin_teacher_reports():
+    user_branch = get_user_branch()
+    
+    # Force branch filter for branch admins
+    if user_branch != 'ALL':
+        request.args = request.args.to_dict()
+        request.args['branch'] = user_branch.lower()
+    
     branches = ['all'] + [b[0] for b in BRANCHES] + ['ADMIN', 'EXAMINATION']
     
     branch = request.args.get('branch', 'all')
     name = request.args.get('name', '')
     month = request.args.get('month')
     year = request.args.get('year')
+    
+    # Security check for branch admin
+    if user_branch != 'ALL' and branch != 'all' and branch.upper() != user_branch:
+        flash('You can only view reports for your own branch.', 'danger')
+        return redirect(url_for('admin_teacher_reports'))
     
     data = get_teacher_attendance_report(
         branch if branch != 'all' else None,
@@ -1775,7 +1842,8 @@ def admin_teacher_reports():
         name=name,
         month=month,
         year=year,
-        data=data
+        data=data,
+        user_branch=user_branch
     )
 
 # FIXED: Export attendance - removed openpyxl dependency issue
@@ -4308,7 +4376,13 @@ ADMIN_STOP_SEMESTER_HTML = """
         {% endwith %}
         
         <div class="card">
-            <h3 style="margin-bottom:1rem;">Stop Semester Attendance</h3>
+            <h3 style="margin-bottom:1rem;">
+                {% if user_branch == 'ALL' %}
+                    Stop Semester Attendance (All Branches)
+                {% else %}
+                    Stop Semester Attendance - {{ user_branch }} Branch Only
+                {% endif %}
+            </h3>
             <form method="POST">
                 {{ form.hidden_tag() }}
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
@@ -4455,7 +4529,13 @@ ADMIN_MANAGE_SUBJECTS_HTML = """
         {% endwith %}
         
         <div class="card">
-            <h3 style="margin-bottom:1rem;">Add New Subject</h3>
+            <h3 style="margin-bottom:1rem;">
+                {% if user_branch == 'ALL' %}
+                    Add New Subject (All Branches)
+                {% else %}
+                    Add New Subject - {{ user_branch }} Branch Only
+                {% endif %}
+            </h3>
             <form method="POST">
                 {{ form.hidden_tag() }}
                 <div class="form-grid">
