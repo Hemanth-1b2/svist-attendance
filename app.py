@@ -1507,13 +1507,13 @@ def admin_dashboard():
     selected_branch = branch_mapping.get(email_prefix, 'ALL')
     
     # Filter data based on branch
-    if user_branch == 'ALL':
+    if selected_branch == 'ALL':
         students = Student.query.filter_by(is_semester_active=True).all()
         teachers = Teacher.query.all()
-        selected_branch = "ALL BRANCHES"
+        #selected_branch = "ALL BRANCHES"
     else:
-        students = Student.query.filter_by(branch=user_branch, is_semester_active=True).all()
-        teachers = Teacher.query.filter_by(branch=user_branch).all()
+        students = Student.query.filter_by(branch=selected_branch, is_semester_active=True).all()
+        teachers = Teacher.query.filter_by(branch=selected_branch).all()
         selected_branch = user_branch
     
     total_students = len(students)
