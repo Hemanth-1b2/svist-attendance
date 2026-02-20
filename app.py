@@ -304,9 +304,14 @@ class SubjectForm(FlaskForm):
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not current_user.is_authenticated or current_user.role != 'admin':
+        if not current_user.is_authenticated:
+            return redirect(url_for('login'))
+        
+        # Allow admin, principal, and branch_admin
+        if current_user.role not in ['admin', 'principal', 'branch_admin']:
             flash('Admin access required.', 'danger')
             return redirect(url_for('login'))
+        
         return f(*args, **kwargs)
     return decorated_function
 
@@ -1482,38 +1487,39 @@ def teacher_yearly_report():
 
 @app.route('/admin/dashboard')
 @login_required
+@admin_required
 def admin_dashboard():
-    # Allow admin, principal, and branch_admin
-    if current_user.role not in ['admin', 'principal', 'branch_admin']:
-        return "Access denied", 403
+    # Extract branch from email (cseadmin@svist.com → CSE)
+    email_prefix = current_user.email.split('@')[0]  # "cseadmin"
     
-    if current_user.role == 'principal':
-        # Principal sees all
+    # Determine branch from email
+    branch_mapping = {
+        'cse.hod': 'CSE',
+        'ece.coordinator': 'ECE', 
+        'eee.incharge': 'EEE',
+        'civil.head': 'CIVIL',
+        'mech.admin': 'MECH',
+        'ds.dept': 'DS',
+        'aiml.director': 'AIML',
+        'principal.office': 'ALL',
+        'admin': 'ALL'
+    }    
+    selected_branch = branch_mapping.get(email_prefix, 'ALL')
+    
+    # Filter data based on branch
+    if user_branch == 'ALL':
         students = Student.query.filter_by(is_semester_active=True).all()
         teachers = Teacher.query.all()
         selected_branch = "ALL BRANCHES"
-        
-    elif current_user.role == 'branch_admin':
-        # Branch admin sees only their branch
-        selected_branch = session.get('selected_branch', 'UNKNOWN')
-        if selected_branch == 'UNKNOWN':
-            return "No branch selected", 403
-            
-        students = Student.query.filter_by(
-            branch=selected_branch,
-            is_semester_active=True
-        ).all()
-        teachers = Teacher.query.filter_by(branch=selected_branch).all()
-        
-    else:  # regular admin
-        students = Student.query.filter_by(is_semester_active=True).all()
-        teachers = Teacher.query.all()
-        selected_branch = "ALL BRANCHES"
+    else:
+        students = Student.query.filter_by(branch=user_branch, is_semester_active=True).all()
+        teachers = Teacher.query.filter_by(branch=user_branch).all()
+        selected_branch = user_branch
     
-    # Rest of your existing code...
     total_students = len(students)
     total_teachers = len(teachers)
     active_semesters = Student.query.filter_by(is_semester_active=True).count()
+    stopped_semesters = StoppedSemester.query.filter_by(is_active=True).count()
     today_teacher_attendance = TeacherAttendance.query.filter_by(date=datetime.now().date()).count()
     recent_logs = AdminLog.query.order_by(AdminLog.timestamp.desc()).limit(10).all()
     
@@ -1522,12 +1528,14 @@ def admin_dashboard():
         total_students=total_students,
         total_teachers=total_teachers,
         active_semesters=active_semesters,
+        stopped_semesters=stopped_semesters,
         today_teacher_attendance=today_teacher_attendance,
         recent_logs=recent_logs,
         today=datetime.now().date(),
         selected_branch=selected_branch,
         user=current_user
     )
+
 
 @app.route('/admin/stop-semester', methods=['GET', 'POST'])
 @login_required
@@ -4123,7 +4131,17 @@ ADMIN_DASHBOARD_HTML = """
             <a href="{{ url_for('logout') }}">Logout</a>
         </div>
     </nav>
-    
+
+    <!-- BRANCH ACCESS BANNER -->
+    <div style="background: #667eea; color: white; padding: 15px; border-radius: 8px; margin: 2rem auto 1rem auto; text-align: center; max-width: 1400px;">
+        {% if selected_branch == 'ALL BRANCHES' %}
+            <strong>🏛️ PRINCIPAL/ADMIN ACCESS</strong> - All Branches
+        {% else %}
+            <strong>📍 BRANCH ACCESS:</strong> {{ selected_branch }}
+        {% endif %}
+    </div>
+    <!-- END BRANCH BANNER -->
+
     <div class="container">
         <div class="stats-grid">
             <div class="stat-card">
