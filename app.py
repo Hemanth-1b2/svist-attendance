@@ -1514,7 +1514,7 @@ def admin_dashboard():
     else:
         students = Student.query.filter_by(branch=selected_branch, is_semester_active=True).all()
         teachers = Teacher.query.filter_by(branch=selected_branch).all()
-        selected_branch = user_branch
+        #selected_branch = user_branch
     
     total_students = len(students)
     total_teachers = len(teachers)
