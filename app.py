@@ -94,20 +94,23 @@ def inject_utilities():
 # DATABASE MODELS
 # ============================================
 
-class User(db.Model):
+class User(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     role = db.Column(db.String(20), nullable=False, index=True)
-    
-    # ADD THIS LINE:
     is_active = db.Column(db.Boolean, default=True)
-    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # ADD THIS METHOD:
+    def get_id(self):
+        return str(self.id)
     
     students = db.relationship('Student', backref='user', lazy='dynamic')
     teacher = db.relationship('Teacher', backref='user', uselist=False, lazy='joined')
+
+
 class SemesterHistory(db.Model):
     __tablename__ = 'semester_history'
     id = db.Column(db.Integer, primary_key=True)
@@ -5394,6 +5397,7 @@ def internal_error(error):
     </body>
     </html>
     """), 500
+
 
 # ============================================
 # APPLICATION ENTRY POINT
