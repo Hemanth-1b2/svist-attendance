@@ -1916,25 +1916,33 @@ def branch_admin_login(branch):
         user = User.query.filter_by(email=email).first()
         
         if user and check_password_hash(user.password_hash, password):
-            session['selected_branch'] = branch.upper()
-            login_user(user)
-            return redirect(url_for('admin_dashboard'))
+            if user.role == 'branch_admin':
+                session['selected_branch'] = branch.upper()
+                login_user(user)
+                return redirect(url_for('admin_dashboard'))
+            else:
+                return "Not authorized", 403
         
         return "Invalid credentials", 401
     
-    return f'''
+    # GET request - show form with CSRF token
+    return render_template_string('''
     <!DOCTYPE html>
     <html>
+    <head>
+        <title>{{ branch }} Admin Login</title>
+    </head>
     <body style="font-family:Arial;max-width:400px;margin:50px auto;">
-        <h2>{branch.upper()} Branch Admin Login</h2>
+        <h2>{{ branch }} Branch Admin Login</h2>
         <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="email" name="email" value="branchadmin@svist.com" required style="width:100%;padding:10px;margin:10px 0;">
             <input type="password" name="password" placeholder="Password" required style="width:100%;padding:10px;margin:10px 0;">
             <button type="submit" style="width:100%;padding:10px;background:#667eea;color:white;border:none;">Login</button>
         </form>
     </body>
     </html>
-    '''
+    ''', branch=branch.upper())
 
 @app.route('/principal/login', methods=['GET', 'POST'])
 def principal_login():
@@ -1951,19 +1959,23 @@ def principal_login():
         
         return "Invalid credentials", 401
     
-    return '''
+    return render_template_string('''
     <!DOCTYPE html>
     <html>
+    <head>
+        <title>Principal Login</title>
+    </head>
     <body style="font-family:Arial;max-width:400px;margin:50px auto;">
         <h2>Principal Login</h2>
         <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="email" name="email" value="principal@svist.com" required style="width:100%;padding:10px;margin:10px 0;">
             <input type="password" name="password" placeholder="Password" required style="width:100%;padding:10px;margin:10px 0;">
             <button type="submit" style="width:100%;padding:10px;background:#d4af37;color:white;border:none;">Login</button>
         </form>
     </body>
     </html>
-    '''
+    ''')
 
 # ============================================
 # HTML TEMPLATES (Inline for Railway.app deployment)
