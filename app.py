@@ -2107,6 +2107,27 @@ INDEX_HTML = """
         .btn-success { background: #48bb78; }
         .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
         .logo { font-size: 4rem; margin-bottom: 1rem; }
+
+        /* Developer Credit Styles */
+        .developer-credit {
+            margin-top: 2rem;
+            color: #718096;
+            font-size: 0.9rem;
+            font-style: italic;
+        }
+        
+        /* Underline Style - Using border-top */
+        .underline-before {
+            border-top: 2px solid #667eea;
+            width: 200px;
+            margin: 0 auto 10px auto;
+            padding-top: 10px;
+        }
+        
+        .developer-credit strong {
+            color: #667eea;
+            font-style: normal;
+        }
     </style>
 </head>
 <body>
@@ -2120,7 +2141,7 @@ INDEX_HTML = """
 
          <!-- ADD THIS LINE HERE -->
         <div class="developer-credit">
-            <div class="underline"></div>
+            <div class="underline-before"></div>
             Developed by <strong>Hemanth Kumar ECE</strong>
         </div>
 
