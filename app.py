@@ -4760,7 +4760,12 @@ ADMIN_STUDENT_REPORTS_HTML = """
                 <a href="{{ url_for('admin_export_attendance', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-success">Export CSV</a>
             </form>
         </div>
-        
+
+        <div class="action-btns" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center;">
+            <button onclick="window.print()" style="padding: 8px 16px; background: #48bb78; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=user_branch.lower(), semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" style="padding: 8px 16px; background: #ed8936; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">📄 Download PDF</a>
+        </div>
+
         {% if data %}
         <div class="card">
             <h3 style="margin-bottom:1rem;">
@@ -4770,10 +4775,7 @@ ADMIN_STUDENT_REPORTS_HTML = """
                     Student Reports - {{ user_branch }} Branch Only (Sorted by Register Number)
                 {% endif %}
             </h3>
-            <div class="action-btns" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center;">
-                <button onclick="window.print()" style="padding: 8px 16px; background: #48bb78; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Print</button>
-                <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=user_branch.lower(), semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" style="padding: 8px 16px; background: #ed8936; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">📄 Download PDF</a>
-            </div>            
+                        
             {% if report_type == 'daily' %}
             <table>
                 <thead>
@@ -5051,7 +5053,12 @@ ADMIN_TEACHER_REPORTS_HTML = """
                 <button type="submit">Generate Report</button>
             </form>
         </div>
-        
+
+        <div class="action-buttons" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center;">
+            <button onclick="window.print()" style="padding: 8px 16px; background: #48bb78; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Print</button>
+            <a href="{{ url_for('download_pdf_admin_teacher', branch=user_branch.lower(), name=name, month=month, year=year) }}" style="padding: 8px 16px; background: #ed8936; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">📄 Download PDF</a>
+        </div>
+
         {% if data %}
         <div class="card">
             <h3 style="margin-bottom:1rem;">
@@ -5061,10 +5068,7 @@ ADMIN_TEACHER_REPORTS_HTML = """
                     Teacher Reports - {{ user_branch }} Branch Only
                 {% endif %}
             </h3>
-            <div class="action-buttons" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center;">
-                <button onclick="window.print()" style="padding: 8px 16px; background: #48bb78; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Print</button>
-                <a href="{{ url_for('download_pdf_admin_teacher', branch=user_branch.lower(), name=name, month=month, year=year) }}" style="padding: 8px 16px; background: #ed8936; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">📄 Download PDF</a>
-            </div>            
+                        
             <table>
                 <thead>
                     <tr>
