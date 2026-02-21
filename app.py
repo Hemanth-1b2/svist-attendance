@@ -2117,6 +2117,12 @@ INDEX_HTML = """
         <a href="{{ url_for('login') }}" class="btn btn-primary">Login</a>
         <a href="{{ url_for('register_student') }}" class="btn btn-secondary">Register as Student</a>
         <a href="{{ url_for('register_teacher') }}" class="btn btn-success">Register as Teacher</a>
+
+         <!-- ADD THIS LINE HERE -->
+        <div class="developer-credit">
+            Developed by <strong>Hemanth Kumar ECE</strong>
+        </div>
+
     </div>
 </body>
 </html>
