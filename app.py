@@ -1747,26 +1747,27 @@ def admin_delete_subject(subject_id):
 def admin_student_reports():
     user_branch = get_user_branch()
     
-    # Force branch filter for branch admins
-    if user_branch != 'ALL':
-        request.args = request.args.to_dict()
-        request.args['branch'] = user_branch.lower()
+    # Set available branches based on user type
+    if user_branch == 'ALL':
+        branches = ['all'] + [b[0] for b in BRANCHES]
+        can_select_branch = True
+    else:
+        branches = [user_branch]
+        can_select_branch = False
     
-    branches = ['all'] + [b[0] for b in BRANCHES]
     semesters = ['all'] + list(range(1, 9))
     sections = ['all', 'A', 'B', 'C']
     
     report_type = request.args.get('report_type', 'daily')
-    branch = request.args.get('branch', 'all')
+    
+    # Force branch for branch admins
+    if user_branch == 'ALL':
+        branch = request.args.get('branch', 'all')
+    else:
+        branch = user_branch.lower()
+    
     semester = request.args.get('semester', 'all')
     section = request.args.get('section', 'all')
-    
-    # Security check for branch admin
-    if user_branch != 'ALL' and branch != 'all' and branch.upper() != user_branch:
-        flash('You can only view reports for your own branch.', 'danger')
-        return redirect(url_for('admin_student_reports'))
-    
-    # Rest of your existing code...
     date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
     month = request.args.get('month', datetime.now().month)
     year = request.args.get('year', datetime.now().year)
@@ -1802,7 +1803,8 @@ def admin_student_reports():
         data=data,
         start_date=start_date,
         end_date=end_date,
-        user_branch=user_branch
+        user_branch=user_branch,
+        can_select_branch=can_select_branch
     )
 
 @app.route('/admin/teacher-reports')
@@ -1811,22 +1813,23 @@ def admin_student_reports():
 def admin_teacher_reports():
     user_branch = get_user_branch()
     
-    # Force branch filter for branch admins
-    if user_branch != 'ALL':
-        request.args = request.args.to_dict()
-        request.args['branch'] = user_branch.lower()
+    # Set available branches based on user type
+    if user_branch == 'ALL':
+        branches = ['all'] + [b[0] for b in BRANCHES] + ['ADMIN', 'EXAMINATION']
+        can_select_branch = True
+    else:
+        branches = [user_branch]
+        can_select_branch = False
     
-    branches = ['all'] + [b[0] for b in BRANCHES] + ['ADMIN', 'EXAMINATION']
+    # Force branch for branch admins
+    if user_branch == 'ALL':
+        branch = request.args.get('branch', 'all')
+    else:
+        branch = user_branch.lower()
     
-    branch = request.args.get('branch', 'all')
     name = request.args.get('name', '')
     month = request.args.get('month')
     year = request.args.get('year')
-    
-    # Security check for branch admin
-    if user_branch != 'ALL' and branch != 'all' and branch.upper() != user_branch:
-        flash('You can only view reports for your own branch.', 'danger')
-        return redirect(url_for('admin_teacher_reports'))
     
     data = get_teacher_attendance_report(
         branch if branch != 'all' else None,
@@ -1843,7 +1846,8 @@ def admin_teacher_reports():
         month=month,
         year=year,
         data=data,
-        user_branch=user_branch
+        user_branch=user_branch,
+        can_select_branch=can_select_branch
     )
 
 # FIXED: Export attendance - removed openpyxl dependency issue
@@ -4699,11 +4703,18 @@ ADMIN_STUDENT_REPORTS_HTML = """
                     </div>
                     <div>
                         <label>Branch</label>
-                        <select name="branch">
-                            {% for b in branches %}
-                            <option value="{{ b }}" {% if b == selected_branch %}selected{% endif %}>{{ b.upper() }}</option>
-                            {% endfor %}
-                        </select>
+                        {% if can_select_branch %}
+                            <select name="branch">
+                                {% for b in branches %}
+                                <option value="{{ b }}" {% if b == selected_branch %}selected{% endif %}>{{ b.upper() }}</option>
+                                {% endfor %}
+                            </select>
+                        {% else %}
+                            <select name="branch" disabled style="background:#e2e8f0;">
+                                <option value="{{ selected_branch }}">{{ selected_branch.upper() }}</option>
+                            </select>
+                            <input type="hidden" name="branch" value="{{ selected_branch }}">
+                        {% endif %}
                     </div>
                     <div>
                         <label>Semester</label>
@@ -4752,7 +4763,13 @@ ADMIN_STUDENT_REPORTS_HTML = """
         
         {% if data %}
         <div class="card">
-            <h3>Report Results (Sorted by Register Number)</h3>
+            <h3 style="margin-bottom:1rem;">
+                {% if user_branch == 'ALL' %}
+                    Student Reports - All Branches (Sorted by Register Number)
+                {% else %}
+                    Student Reports - {{ user_branch }} Branch Only (Sorted by Register Number)
+                {% endif %}
+            </h3>
             <div class="action-btns">
                 <button class="btn btn-print" onclick="window.print()">🖨️ Print</button>
                 <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-pdf">📄 Download PDF</a>
@@ -4995,11 +5012,18 @@ ADMIN_TEACHER_REPORTS_HTML = """
                 <div class="filters">
                     <div>
                         <label>Branch</label>
-                        <select name="branch">
-                            {% for b in branches %}
-                            <option value="{{ b }}" {% if b == selected_branch %}selected{% endif %}>{{ b.upper() }}</option>
-                            {% endfor %}
-                        </select>
+                        {% if can_select_branch %}
+                            <select name="branch">
+                                {% for b in branches %}
+                                <option value="{{ b }}" {% if b == selected_branch %}selected{% endif %}>{{ b.upper() }}</option>
+                                {% endfor %}
+                            </select>
+                        {% else %}
+                            <select name="branch" disabled style="background:#e2e8f0;">
+                                <option value="{{ selected_branch }}">{{ selected_branch.upper() }}</option>
+                            </select>
+                            <input type="hidden" name="branch" value="{{ selected_branch }}">
+                        {% endif %}
                     </div>
                     <div>
                         <label>Teacher Name</label>
@@ -5030,7 +5054,13 @@ ADMIN_TEACHER_REPORTS_HTML = """
         
         {% if data %}
         <div class="card">
-            <h3>Teacher Attendance</h3>
+            <h3 style="margin-bottom:1rem;">
+                {% if user_branch == 'ALL' %}
+                    Teacher Reports - All Branches
+                {% else %}
+                    Teacher Reports - {{ user_branch }} Branch Only
+                {% endif %}
+            </h3>
             <div class="action-buttons">
                 <button class="btn-action btn-print" onclick="window.print()">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
