@@ -2120,6 +2120,7 @@ INDEX_HTML = """
 
          <!-- ADD THIS LINE HERE -->
         <div class="developer-credit">
+            <div class="underline"></div>
             Developed by <strong>Hemanth Kumar ECE</strong>
         </div>
 
