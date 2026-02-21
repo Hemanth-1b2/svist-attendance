@@ -4770,14 +4770,10 @@ ADMIN_STUDENT_REPORTS_HTML = """
                     Student Reports - {{ user_branch }} Branch Only (Sorted by Register Number)
                 {% endif %}
             </h3>
-            <div class="action-btns" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center; visibility: visible !important;">
-                <button class="btn btn-print" onclick="window.print()" style="display: inline-flex !important; align-items: center; gap: 6px; padding: 8px 16px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; line-height: 1.4; height: 36px; visibility: visible !important;">
-                    🖨️ Print
-                </button>
-                <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=selected_branch, semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" class="btn btn-pdf" style="display: inline-flex !important; align-items: center; gap: 6px; padding: 8px 16px; background: #f3f4f6; color: #dc2626; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1.4; height: 36px; visibility: visible !important;">
-                    📄 Download PDF
-                </a>
-            </div>
+            <div class="action-btns" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center;">
+                <button onclick="window.print()" style="padding: 8px 16px; background: #48bb78; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Print</button>
+                <a href="{{ url_for('download_pdf_admin', report_type=report_type, branch=user_branch.lower(), semester=selected_semester, section=selected_section, date=date.strftime('%Y-%m-%d') if report_type == 'daily' else None, month=month if report_type == 'monthly' else None, year=year if report_type == 'monthly' else None) }}" style="padding: 8px 16px; background: #ed8936; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">📄 Download PDF</a>
+            </div>            
             {% if report_type == 'daily' %}
             <table>
                 <thead>
@@ -5065,20 +5061,10 @@ ADMIN_TEACHER_REPORTS_HTML = """
                     Teacher Reports - {{ user_branch }} Branch Only
                 {% endif %}
             </h3>
-            <div class="action-buttons" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center; visibility: visible !important;">
-                <button class="btn-action btn-print" onclick="window.print()" style="display: inline-flex !important; align-items: center; gap: 6px; padding: 8px 16px; background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; line-height: 1.4; height: 36px; visibility: visible !important;">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path>
-                    </svg>
-                    Print
-                </button>
-                <a href="{{ url_for('download_pdf_admin_teacher', branch=selected_branch, name=name, month=month, year=year) }}" class="btn-action btn-download" style="display: inline-flex !important; align-items: center; gap: 6px; padding: 8px 16px; background: #f3f4f6; color: #dc2626; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; text-decoration: none; line-height: 1.4; height: 36px; visibility: visible !important;">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-                    </svg>
-                    Download PDF
-                </a>
-            </div>
+            <div class="action-buttons" style="margin-bottom: 1.5rem; display: flex !important; gap: 10px; align-items: center;">
+                <button onclick="window.print()" style="padding: 8px 16px; background: #48bb78; color: white; border: none; border-radius: 5px; cursor: pointer;">🖨️ Print</button>
+                <a href="{{ url_for('download_pdf_admin_teacher', branch=user_branch.lower(), name=name, month=month, year=year) }}" style="padding: 8px 16px; background: #ed8936; color: white; text-decoration: none; border-radius: 5px; display: inline-block;">📄 Download PDF</a>
+            </div>            
             <table>
                 <thead>
                     <tr>
