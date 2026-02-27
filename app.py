@@ -4,6 +4,14 @@
 # Production Version for Railway.app + TiDB
 # ============================================
 
+from datetime import timedelta
+
+def to_ist(dt):
+    """Convert UTC datetime to Indian Standard Time"""
+    if dt is None:
+        return None
+    return dt + timedelta(hours=5, minutes=30)
+
 import pymysql
 pymysql.install_as_MySQLdb()
 
@@ -87,7 +95,8 @@ def inject_utilities():
     return dict(
         datetime=datetime,
         str=str,
-        int=int
+        int=int,
+        timedelta=timedelta  # ADD THIS LINE
     )
 
 # ============================================
@@ -1203,12 +1212,18 @@ def teacher_dashboard():
         teacher_id=teacher.id, date=today
     ).first()
     
+    # ✅ FIX: Convert to IST for display
+    check_in_ist = to_ist(today_status.check_in) if today_status else None
+    check_out_ist = to_ist(today_status.check_out) if today_status else None
+    
     yearly_data = get_teacher_yearly_attendance(teacher, current_year)
     
     return render_template_string(
         TEACHER_DASHBOARD_HTML,
         teacher=teacher,
         today_status=today_status,
+        check_in_ist=check_in_ist,      # Pass IST times
+        check_out_ist=check_out_ist,    # Pass IST times
         yearly_data=yearly_data,
         today=today
     )
@@ -3375,7 +3390,7 @@ TEACHER_DASHBOARD_HTML = """
         {% elif today_status and today_status.check_in %}
         <div class="attendance-box checked-out">
             <h2>🟢 Checked In</h2>
-            <p>Check-in time: {{ today_status.check_in.strftime('%H:%M') }}</p>
+            <p>Check-in time: {{ check_in_ist.strftime('%H:%M') }}</p>
             <button class="btn" onclick="markAttendance()">Check Out</button>
             <p id="location-status">Location verified ✓</p>
         </div>
@@ -3833,11 +3848,11 @@ TEACHER_DAILY_REPORT_HTML = """
             <div class="status-box {% if attendance.status == 'present' %}status-present{% else %}status-absent{% endif %}">
                 <h3>Status: {{ attendance.status.title() }}</h3>
                 {% if attendance.check_in %}
-                <div class="time-display">{{ attendance.check_in.strftime('%H:%M') }}</div>
+                <div class="time-display">{{ (attendance.check_in + timedelta(hours=5, minutes=30)).strftime('%H:%M') }}</div>
                 <p>Check-in Time</p>
                 {% endif %}
                 {% if attendance.check_out %}
-                <p style="margin-top:1rem;">Check-out: {{ attendance.check_out.strftime('%H:%M') }}</p>
+                <p style="margin-top:1rem;">Check-out: {{ (attendance.check_out + timedelta(hours=5, minutes=30)).strftime('%H:%M') }}</p>
                 {% endif %}
                 {% if attendance.location_verified %}
                 <p style="margin-top:1rem;">✓ Location Verified</p>
