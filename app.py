@@ -69,9 +69,9 @@ app.config['MAIL_PASSWORD'] = os.environ.get('jjdz rizt ccli ojsr')
 app.config['MAIL_DEFAULT_SENDER'] = os.environ.get('svistattendance7@gmail.com')
 
 # GPS Configuration
-COLLEGE_LAT = float(os.environ.get('COLLEGE_LAT', 17.1000))
-COLLEGE_LNG = float(os.environ.get('COLLEGE_LNG', 80.6000))
-ALLOWED_RADIUS_KM = float(os.environ.get('ALLOWED_RADIUS_KM', 0.5))
+COLLEGE_LAT = float(os.environ.get('COLLEGE_LAT', 17.1002633))
+COLLEGE_LNG = float(os.environ.get('COLLEGE_LNG', 80.6200767))
+ALLOWED_RADIUS_KM = float(os.environ.get('ALLOWED_RADIUS_KM', 1.0))
 
 # Initialize Extensions
 db = SQLAlchemy(app)
@@ -1360,10 +1360,8 @@ def get_students_for_attendance():
     if not all([branch, semester, section]):
         return jsonify({'error': 'Missing parameters'}), 400
     
-    # Check if teacher's branch matches or is admin/examination
-    teacher = current_user.teacher
-    if teacher.branch not in ['ADMIN', 'EXAMINATION'] and teacher.branch != branch:
-        return jsonify({'error': 'Not authorized for this branch'}), 403
+    #  REMOVED: Branch restriction check
+    # All teachers can now access students from any branch
     
     # FIXED: Sort by register_number
     students = Student.query.filter_by(
@@ -1400,18 +1398,11 @@ def teacher_attendance_interface():
         flash('Please mark your attendance first', 'warning')
         return redirect(url_for('teacher_dashboard'))
     
-    # Get subjects for dropdown
-    subjects = Subject.query.filter_by(
-        branch=teacher.branch if teacher.branch not in ['ADMIN', 'EXAMINATION'] else 'CSE'
-    ).all()
+    #  FIXED: Get ALL subjects from ALL branches
+    subjects = Subject.query.order_by(Subject.branch, Subject.semester, Subject.code).all()
     
-    # Get branches based on teacher role
-    if teacher.branch == 'ADMIN':
-        allowed_branches = BRANCHES
-    elif teacher.branch == 'EXAMINATION':
-        allowed_branches = BRANCHES
-    else:
-        allowed_branches = [(teacher.branch, teacher.branch)]
+    #  FIXED: Allow ALL branches for ALL teachers
+    allowed_branches = BRANCHES  # All branches for everyone
     
     return render_template_string(
         TEACHER_ATTENDANCE_INTERFACE_HTML,
@@ -3565,6 +3556,15 @@ TEACHER_ATTENDANCE_INTERFACE_HTML = """
             margin-bottom: 1rem;
             display: none;
         }
+        .info-badge {
+            background: #bee3f8;
+            color: #2a4365;
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            margin-bottom: 1rem;
+            display: inline-block;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
@@ -3574,6 +3574,11 @@ TEACHER_ATTENDANCE_INTERFACE_HTML = """
     <div class="container">
         <div class="card">
             <div class="success-msg" id="success-msg">Attendance marked successfully!</div>
+            
+            <!-- ✅ Info badge showing teacher can access all branches -->
+            <div class="info-badge">
+                👨‍🏫 Teacher: {{ teacher.name }} | You can mark attendance for ANY branch/semester
+            </div>
             
             <div class="filters">
                 <div>
@@ -3604,7 +3609,9 @@ TEACHER_ATTENDANCE_INTERFACE_HTML = """
                     <label>Subject</label>
                     <select id="subject">
                         {% for subj in subjects %}
-                        <option value="{{ subj.name }}">{{ subj.code }} - {{ subj.name }}</option>
+                        <option value="{{ subj.name }}">
+                            {{ subj.branch }} - Sem {{ subj.semester }} - {{ subj.code }} - {{ subj.name }}
+                        </option>
                         {% endfor %}
                     </select>
                 </div>
@@ -3674,7 +3681,7 @@ TEACHER_ATTENDANCE_INTERFACE_HTML = """
                             </div>
                         `).join('');
                     } else {
-                        list.innerHTML = '<p>No students found</p>';
+                        list.innerHTML = '<p>No students found in this branch/semester/section</p>';
                     }
                 });
         }
