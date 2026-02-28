@@ -1523,18 +1523,26 @@ def admin_dashboard():
         teachers = Teacher.query.all()
         selected_branch = "ALL BRANCHES"
         can_manage_all = True
+        
+        #  PRINCIPAL/MAIN ADMIN: Sees ALL logs from everyone
+        recent_logs = AdminLog.query.order_by(AdminLog.timestamp.desc()).limit(10).all()
+        
     else:
         # Branch admin sees only their branch
         students = Student.query.filter_by(branch=user_branch, is_semester_active=True).all()
         teachers = Teacher.query.filter_by(branch=user_branch).all()
         selected_branch = user_branch
         can_manage_all = False
+        
+        #  BRANCH ADMIN: Sees ONLY their own actions (not even other branch admins)
+        recent_logs = AdminLog.query.filter_by(
+            admin_id=current_user.id
+        ).order_by(AdminLog.timestamp.desc()).limit(10).all()
     
     total_students = len(students)
     total_teachers = len(teachers)
     active_semesters = Student.query.filter_by(is_semester_active=True).count()
     today_teacher_attendance = TeacherAttendance.query.filter_by(date=datetime.now().date()).count()
-    recent_logs = AdminLog.query.order_by(AdminLog.timestamp.desc()).limit(10).all()
     
     return render_template_string(
         ADMIN_DASHBOARD_HTML,
